@@ -47,6 +47,8 @@ tags:
     description: Data asset marketplace (Phase 5)
   - name: Health
     description: Connection health monitoring
+  - name: Wallet
+    description: Wallet creation and recovery (BIP39/BIP32)
 
 paths:
   /chain:
@@ -871,3 +873,114 @@ paths:
                   timestamp: { type: integer }
         "503":
           description: Unhealthy
+
+  # ── Wallet ──
+
+  /wallet/create:
+    post:
+      operationId: createWallet
+      summary: Generate a new Radiant wallet
+      tags: [Wallet]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                network: { type: string, enum: [mainnet, testnet], default: mainnet }
+                mnemonic: { type: boolean, default: false, description: If true, generate BIP39 mnemonic }
+                word_count: { type: integer, enum: [12, 15, 18, 21, 24], default: 12 }
+                passphrase: { type: string, default: "", description: Optional BIP39 passphrase }
+                path: { type: string, default: "m/44'/0'/0'/0/0", description: BIP32 derivation path }
+      responses:
+        "200":
+          description: New wallet
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  address: { type: string }
+                  publicKey: { type: string }
+                  wif: { type: string }
+                  mnemonic: { type: string, nullable: true }
+                  derivationPath: { type: string, nullable: true }
+                  network: { type: string }
+
+  /wallet/restore:
+    post:
+      operationId: restoreWallet
+      summary: Restore wallet from BIP39 mnemonic
+      tags: [Wallet]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mnemonic]
+              properties:
+                mnemonic: { type: string, description: BIP39 mnemonic (12-24 words) }
+                network: { type: string, enum: [mainnet, testnet], default: mainnet }
+                passphrase: { type: string, default: "" }
+                path: { type: string, default: "m/44'/0'/0'/0/0" }
+      responses:
+        "200":
+          description: Restored wallet
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  address: { type: string }
+                  publicKey: { type: string }
+                  wif: { type: string }
+                  derivationPath: { type: string }
+                  network: { type: string }
+                  valid: { type: boolean }
+
+  /tx/{txid}/decode:
+    get:
+      operationId: decodeTransaction
+      summary: Decode a transaction (verbose)
+      tags: [Blockchain]
+      parameters:
+        - name: txid
+          in: path
+          required: true
+          schema: { type: string, minLength: 64, maxLength: 64 }
+      responses:
+        "200":
+          description: Decoded transaction
+          content:
+            application/json:
+              schema: { type: object }
+
+  /swap/history:
+    get:
+      operationId: getSwapHistory
+      summary: Get trade history for a token
+      tags: [Swap]
+      parameters:
+        - name: ref
+          in: query
+          required: true
+          schema: { type: string }
+          description: Token reference
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: Trade history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ref: { type: string }
+                  history: { type: array, items: { type: object } }
