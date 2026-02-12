@@ -1,0 +1,184 @@
+/**
+ * Agent SDK integration test.
+ * Tests wallet management, spending limits, balance queries, and event monitoring.
+ */
+
+import { RadiantAgent, AgentWallet } from "../src/agent.js";
+
+let passed = 0;
+let failed = 0;
+
+function assert(condition: boolean, msg: string) {
+  if (condition) { console.log(`  ✅ ${msg}`); passed++; }
+  else { console.log(`  ❌ ${msg}`); failed++; }
+}
+
+async function main() {
+  // ─── Test 1: Wallet Creation ───
+  console.log("Test 1: Wallet creation");
+  const w1 = AgentWallet.create("mainnet");
+  const info1 = w1.getInfo();
+  assert(info1.address.startsWith("1"), `address starts with 1: ${info1.address}`);
+  assert(info1.publicKey.length === 66, `pubkey is 33 bytes compressed: ${info1.publicKey.length / 2} bytes`);
+  assert(info1.wif.startsWith("K") || info1.wif.startsWith("L"), `WIF starts with K or L: ${info1.wif[0]}`);
+  assert(info1.network === "mainnet", `network = mainnet`);
+
+  // ─── Test 2: WIF Round-Trip ───
+  console.log("\nTest 2: WIF import/export round-trip");
+  const wif = w1.getWIF();
+  const w2 = AgentWallet.fromWIF(wif);
+  assert(w2.address === w1.address, `restored address matches: ${w2.address}`);
+  assert(w2.getWIF() === wif, "WIF round-trip matches");
+  assert(w2.getPublicKeyHex() === w1.getPublicKeyHex(), "pubkey matches");
+
+  // ─── Test 3: Multiple Wallets are Unique ───
+  console.log("\nTest 3: Multiple wallets are unique");
+  const w3 = AgentWallet.create();
+  const w4 = AgentWallet.create();
+  assert(w3.address !== w4.address, `w3 ${w3.address.slice(0, 10)}... ≠ w4 ${w4.address.slice(0, 10)}...`);
+
+  // ─── Test 4: Testnet Wallet ───
+  console.log("\nTest 4: Testnet wallet");
+  const wt = AgentWallet.create("testnet");
+  assert(wt.address.startsWith("m") || wt.address.startsWith("n"), `testnet address prefix: ${wt.address[0]}`);
+  assert(wt.getInfo().network === "testnet", "network = testnet");
+
+  // ─── Test 5: Hex Import ───
+  console.log("\nTest 5: Hex private key import");
+  const hexKey = w1.getPrivateKeyBuffer().toString("hex");
+  const w5 = AgentWallet.fromHex(hexKey);
+  assert(w5.address === w1.address, "hex import matches original address");
+
+  // ─── Test 6: Agent Initialization ───
+  console.log("\nTest 6: Agent initialization");
+  const agent = new RadiantAgent({
+    network: "mainnet",
+    electrumxHost: "electrumx.radiant4people.com",
+    electrumxPort: 50012,
+    electrumxSsl: true,
+    spendLimitPerTx: 100_00000000, // 100 RXD
+    spendLimitPerHour: 1000_00000000, // 1000 RXD
+  });
+  assert(!agent.hasWallet(), "no wallet initially");
+
+  // ─── Test 7: Agent Wallet Management ───
+  console.log("\nTest 7: Agent wallet management");
+  const walletInfo = agent.createWallet();
+  assert(agent.hasWallet(), "wallet created");
+  assert(walletInfo.address.startsWith("1"), `wallet address: ${walletInfo.address.slice(0, 15)}...`);
+  assert(agent.getAddress() === walletInfo.address, "getAddress() matches");
+
+  // ─── Test 8: Spending Limits ───
+  console.log("\nTest 8: Spending limits");
+  const check1 = agent.checkSpendLimit(50_00000000); // 50 RXD
+  assert(check1.allowed === true, "50 RXD allowed (limit: 100)");
+
+  const check2 = agent.checkSpendLimit(150_00000000); // 150 RXD
+  assert(check2.allowed === false, "150 RXD blocked (limit: 100)");
+  assert(check2.reason!.includes("per-transaction"), `reason mentions per-transaction limit`);
+
+  // Record some spending
+  agent.recordSpend(50_00000000, "abc123", "test spend 1");
+  agent.recordSpend(50_00000000, "def456", "test spend 2");
+
+  const hourly = agent.getHourlySpending();
+  assert(hourly.photons === 100_00000000, `hourly spending = ${hourly.rxd} RXD`);
+
+  const history = agent.getSpendingHistory();
+  assert(history.length === 2, `spending history has 2 records`);
+
+  // ─── Test 9: Hourly Limit ───
+  console.log("\nTest 9: Hourly spend limit");
+  // Already spent 100 RXD, per-tx limit is 100 RXD, hourly limit is 1000 RXD
+  // 95 RXD is under per-tx limit; 100+95+95+...would eventually exceed hourly
+  agent.recordSpend(90_00000000, "ghi789", "test spend 3"); // now 190 RXD spent
+  agent.recordSpend(90_00000000, "jkl012", "test spend 4"); // now 280 RXD spent
+
+  const check3 = agent.checkSpendLimit(90_00000000); // 90 RXD per-tx OK, 280+90=370 < 1000
+  assert(check3.allowed === true, "90 RXD allowed (per-tx OK, hourly 280+90=370 < 1000)");
+
+  // Push spending near hourly limit
+  for (let i = 0; i < 7; i++) agent.recordSpend(90_00000000); // +630 → 910 total
+  const check4 = agent.checkSpendLimit(95_00000000); // 910+95=1005 > 1000
+  assert(check4.allowed === false, "95 RXD blocked (hourly: 910+95 > 1000)");
+
+  // ─── Test 10: Address Validation ───
+  console.log("\nTest 10: Address validation");
+  assert(agent.validateAddress(walletInfo.address) === true, "wallet address valid");
+  assert(agent.validateAddress("INVALID") === false, "invalid address rejected");
+
+  // ─── Test 11: Network Params ───
+  console.log("\nTest 11: Network params and protocol info");
+  const params = agent.getNetworkParams();
+  assert(params.ticker === "RXD", `ticker = ${params.ticker}`);
+  assert(params.v2ActivationHeight === 410_000, `v2 activation = ${params.v2ActivationHeight}`);
+
+  const protocols = agent.getProtocols();
+  assert((protocols as Record<string, {name: string}>)[1].name === "GLYPH_FT", "protocol 1 = GLYPH_FT");
+
+  const algos = agent.getAlgorithms();
+  assert((algos as Record<string, {name: string}>)[1].name === "BLAKE3", "algo 1 = BLAKE3");
+
+  // ─── Test 12: Live ElectrumX Queries ───
+  console.log("\nTest 12: Live ElectrumX queries");
+  try {
+    await agent.connect();
+
+    const tip = await agent.getChainTip();
+    assert(tip.height > 400_000, `chain height = ${tip.height}`);
+
+    const fee = await agent.estimateFee(6);
+    assert(typeof fee === "number", `fee estimate = ${fee}`);
+
+    // Balance of a known address
+    const bal = await agent.getBalance("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa");
+    assert(bal.confirmed.photons > 0, `genesis address balance = ${bal.confirmed.rxd} RXD`);
+
+    // UTXOs
+    const utxos = await agent.getUTXOs("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa");
+    assert(utxos.length > 0, `genesis address has ${utxos.length} UTXOs`);
+
+    // History
+    const history = await agent.getHistory("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa");
+    assert(history.length > 0, `genesis address has ${history.length} transactions`);
+
+    await agent.disconnect();
+  } catch (err) {
+    console.error("  Live test error:", err);
+    failed++;
+  }
+
+  // ─── Test 13: Connection URL Parsing ───
+  console.log("\nTest 13: Connection URL parsing");
+  const agent2 = new RadiantAgent({
+    electrumx: "ssl://electrumx.radiant4people.com:50012",
+  });
+  assert(agent2.getNetworkParams().ticker === "RXD", "agent from URL string works");
+
+  // ─── Test 14: Import Wallet via Agent ───
+  console.log("\nTest 14: Import wallet via agent");
+  const agent3 = new RadiantAgent();
+  const imported = agent3.importWallet(walletInfo.wif);
+  assert(imported.address === walletInfo.address, "imported wallet matches");
+
+  // ─── Test 15: Spend Limit Warning Event ───
+  console.log("\nTest 15: Spend limit warning event");
+  const warnAgent = new RadiantAgent({ spendLimitPerHour: 100_00000000 });
+  warnAgent.createWallet();
+  let warningReceived = false;
+  warnAgent.on("spend-limit-warning", () => { warningReceived = true; });
+  warnAgent.recordSpend(85_00000000); // 85% of limit → triggers warning
+  assert(warningReceived, "spend-limit-warning event emitted at 85%");
+
+  // Summary
+  console.log(`\n${"=".repeat(40)}`);
+  console.log(`Agent SDK Test Results: ${passed} passed, ${failed} failed`);
+  console.log(`${"=".repeat(40)}`);
+
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+main().catch((err) => {
+  console.error("Agent test crashed:", err);
+  process.exit(1);
+});
