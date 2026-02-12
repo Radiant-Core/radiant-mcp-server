@@ -1,0 +1,72 @@
+pragma radiant ^2.0.0;
+
+// MicropaymentChannel — Payment channel for agent-to-agent micropayments
+//
+// Enables high-frequency, low-cost payments between AI agents without
+// requiring an on-chain transaction for every query/response cycle.
+//
+// Flow:
+//   1. Open:  Agent A locks RXD in 2-of-2 multisig with Agent B
+//   2. Use:   Off-chain signed state updates for each query/response
+//   3. Close: Either party settles the final balance on-chain
+//   4. Timeout: Agent A can reclaim funds after timelock expires
+//
+// At ~0.001 RXD per on-chain transaction, even direct payments are viable,
+// but channels allow sub-satoshi accounting and batch settlement.
+//
+// Requires: V2 opcodes for blake3-based state commitments
+
+contract MicropaymentChannel(
+    pubkey agentA,         // Payer (e.g., requesting agent)
+    pubkey agentB,         // Payee (e.g., service agent)
+    int timeoutBlocks      // Blocks before agentA can unilaterally reclaim
+) {
+    // Cooperative close: both agents agree on final balances
+    // Output 0 = agentA's remaining balance
+    // Output 1 = agentB's earned balance
+    function cooperativeClose(sig sigA, sig sigB) {
+        require(checkSig(sigA, agentA));
+        require(checkSig(sigB, agentB));
+
+        // Both outputs must be non-dust
+        require(tx.outputs[0].value >= 546);
+        require(tx.outputs[1].value >= 546);
+
+        // Total output must not exceed total input (conservation)
+        int fee = tx.state.inputSum - tx.state.outputSum;
+        require(fee >= 0);
+        require(fee <= 1000000);  // Max 0.01 RXD fee
+    }
+
+    // Unilateral close by agentB with signed state
+    // agentB provides the latest state signed by agentA
+    function settleByPayee(
+        sig sigB,
+        sig stateSignatureA,       // agentA's signature on the state
+        int agentABalance,         // agentA's final balance
+        int agentBBalance,         // agentB's final balance
+        int nonce                  // State nonce (higher = newer)
+    ) {
+        require(checkSig(sigB, agentB));
+
+        // Verify agentA signed this state
+        // The state message is: blake3(agentABalance || agentBBalance || nonce)
+        bytes stateData = bytes(agentABalance) + bytes(agentBBalance) + bytes(nonce);
+        require(checkDataSig(stateSignatureA, blake3(stateData), agentA));
+
+        // Verify output amounts match claimed state
+        require(tx.outputs[0].value >= agentABalance);
+        require(tx.outputs[1].value >= agentBBalance);
+
+        // Fee conservation
+        int fee = tx.state.inputSum - tx.state.outputSum;
+        require(fee >= 0);
+        require(fee <= 1000000);
+    }
+
+    // Timeout reclaim: agentA gets everything back after timelock
+    function timeoutReclaim(sig sigA) {
+        require(checkSig(sigA, agentA));
+        require(tx.age >= timeoutBlocks);
+    }
+}

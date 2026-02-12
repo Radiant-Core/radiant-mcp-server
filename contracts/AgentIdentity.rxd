@@ -1,0 +1,77 @@
+pragma radiant ^2.0.0;
+
+// AgentIdentity — On-chain AI agent registry via singleton NFT
+//
+// Each AI agent mints a unique identity NFT containing its capabilities,
+// pricing, model info, and payment address. Other agents or users discover
+// agents by querying the WAVE naming system or scanning identity NFTs.
+//
+// Zone record convention (stored in Glyph metadata):
+//   x-capabilities: "research,summarize,translate,code"
+//   x-pricing:      "100sat/query"
+//   x-model:        "gpt-4-turbo"
+//   x-api:          "https://api.myservice.com/agent"
+//   address:        "1AgentPaymentAddress..."
+//
+// The identity NFT can be updated (mutable state) to reflect
+// capability changes, pricing updates, or status changes.
+//
+// Requires: Hard Fork V2 (OP_BLAKE3 for capability hashing)
+
+contract AgentIdentity(
+    bytes36 constant $identityRef,  // Unique agent identity reference
+    pubkey agentPk                  // Agent's master public key
+) {
+    // Update agent profile (capabilities, pricing, status)
+    // The new profile data is committed via blake3 hash in the output state
+    function updateProfile(
+        sig s,
+        bytes profileData,          // CBOR-encoded profile update
+        bytes32 profileCommitment   // blake3(profileData) — stored on-chain
+    ) {
+        require(checkSig(s, agentPk));
+
+        // Verify commitment matches profile data
+        require(blake3(profileData) == profileCommitment);
+
+        // Singleton identity: exactly one exists
+        pushInputRefSingleton($identityRef);
+        require(tx.outputs.refOutputCount($identityRef) == 1);
+
+        // Code-continuity: contract logic must be preserved
+        bytes myCodeHash = hash256(tx.inputs[this.activeInputIndex].codeScript);
+        require(tx.outputs.codeScriptCount(myCodeHash) >= 1);
+    }
+
+    // Attest: agent signs a statement anchored on-chain
+    // Used for reputation, SLA commitments, or capability proofs
+    function attest(
+        sig s,
+        bytes statement,
+        bytes32 statementHash
+    ) {
+        require(checkSig(s, agentPk));
+        require(blake3(statement) == statementHash);
+
+        pushInputRefSingleton($identityRef);
+        require(tx.outputs.refOutputCount($identityRef) == 1);
+
+        bytes myCodeHash = hash256(tx.inputs[this.activeInputIndex].codeScript);
+        require(tx.outputs.codeScriptCount(myCodeHash) >= 1);
+    }
+
+    // Transfer identity to a new key (e.g., key rotation)
+    function transfer(sig s) {
+        require(checkSig(s, agentPk));
+        pushInputRefSingleton($identityRef);
+        require(tx.outputs.refOutputCount($identityRef) == 1);
+    }
+
+    // Revoke identity (burn the singleton)
+    function revoke(sig s) {
+        require(checkSig(s, agentPk));
+        pushInputRefSingleton($identityRef);
+        // No output ref requirement → singleton is consumed (burned)
+        require(tx.outputs.refOutputCount($identityRef) == 0);
+    }
+}

@@ -512,3 +512,25 @@ export class RadiantAgent extends EventEmitter {
 }
 
 export { AgentWallet } from "./wallet.js";
+export {
+  createInferenceProof,
+  verifyInferenceProof,
+  buildAgentProfile,
+  buildAgentWaveRecords,
+  parseAgentCapabilities,
+  checkTokenGatedAccess,
+  openChannel,
+  updateChannel,
+  computeChannelCommitment,
+  channelSummary,
+  buildDataAssetMetadata,
+  computeProvenanceCommitment,
+  searchDataAssets,
+} from "./primitives.js";
+export type {
+  InferenceProofData,
+  AgentProfile,
+  AccessCheckResult,
+  ChannelState,
+  DataAsset,
+} from "./primitives.js";

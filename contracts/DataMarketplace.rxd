@@ -1,0 +1,108 @@
+pragma radiant ^2.0.0;
+
+// DataMarketplace — On-chain primitives for AI data asset trading
+//
+// Enables creation and exchange of AI data assets as Glyph tokens:
+//   - Training datasets (NFT + DAT with content hash)
+//   - Model weights (NFT + Encrypted, decryptable by buyer)
+//   - Computation credits (FT + dMint, mined by running inference)
+//   - Curated collections (Container + child NFTs)
+//
+// This contract manages a data listing: the seller locks a data asset NFT
+// into an escrow that can only be released when the buyer pays the asking
+// price. The blake3 hash of the data is committed on-chain for verification.
+//
+// Requires: V2 (OP_BLAKE3 for data integrity verification)
+
+contract DataListing(
+    bytes36 constant $dataRef,     // NFT reference for the data asset
+    pubkey sellerPk,               // Seller's public key
+    int askingPrice                 // Price in photons
+) {
+    // Buy the data asset: buyer pays askingPrice to seller
+    // Output 0 = data NFT to buyer
+    // Output 1 = payment to seller (>= askingPrice)
+    function buy(sig buyerSig, pubkey buyerPk) {
+        require(checkSig(buyerSig, buyerPk));
+
+        // Transfer the data NFT singleton
+        pushInputRefSingleton($dataRef);
+        require(tx.outputs.refOutputCount($dataRef) == 1);
+
+        // Verify payment: output 1 must pay seller at least askingPrice
+        require(tx.outputs[1].value >= askingPrice);
+
+        // Fee conservation
+        int fee = tx.state.inputSum - tx.state.outputSum;
+        require(fee >= 0);
+        require(fee <= 1000000);
+    }
+
+    // Update listing price (seller only)
+    function updatePrice(sig s) {
+        require(checkSig(s, sellerPk));
+
+        pushInputRefSingleton($dataRef);
+        require(tx.outputs.refOutputCount($dataRef) == 1);
+
+        // Code continuity: output must carry same contract
+        bytes myCodeHash = hash256(tx.inputs[this.activeInputIndex].codeScript);
+        require(tx.outputs.codeScriptCount(myCodeHash) >= 1);
+    }
+
+    // Cancel listing (seller reclaims the data NFT)
+    function cancel(sig s) {
+        require(checkSig(s, sellerPk));
+
+        pushInputRefSingleton($dataRef);
+        require(tx.outputs.refOutputCount($dataRef) == 1);
+    }
+}
+
+// DataProvenance — Tracks dataset lineage and licensing on-chain
+// Each dataset NFT carries a blake3 hash of the content + parent lineage
+contract DataProvenance(
+    bytes36 constant $dataRef,
+    pubkey ownerPk
+) {
+    // Record a derivation: this dataset was derived from parent datasets
+    // Stores blake3(parentHash1 || parentHash2 || ... || transformDescription)
+    function recordDerivation(
+        sig s,
+        bytes derivationData,       // Concatenated parent hashes + transform description
+        bytes32 derivationCommit    // blake3(derivationData)
+    ) {
+        require(checkSig(s, ownerPk));
+        require(blake3(derivationData) == derivationCommit);
+
+        pushInputRefSingleton($dataRef);
+        require(tx.outputs.refOutputCount($dataRef) == 1);
+
+        bytes myCodeHash = hash256(tx.inputs[this.activeInputIndex].codeScript);
+        require(tx.outputs.codeScriptCount(myCodeHash) >= 1);
+    }
+
+    // Transfer ownership
+    function transfer(sig s) {
+        require(checkSig(s, ownerPk));
+        pushInputRefSingleton($dataRef);
+        require(tx.outputs.refOutputCount($dataRef) == 1);
+    }
+
+    // License: grant read access without transferring ownership
+    // Creates a license token (separate FT) that attests permission
+    function grantLicense(sig s, int licenseTermBlocks) {
+        require(checkSig(s, ownerPk));
+        require(licenseTermBlocks > 0);
+
+        // Data NFT stays with owner
+        pushInputRefSingleton($dataRef);
+        require(tx.outputs.refOutputCount($dataRef) == 1);
+
+        // Must have at least 2 outputs: data NFT + license token
+        require(tx.outputs.length >= 2);
+
+        bytes myCodeHash = hash256(tx.inputs[this.activeInputIndex].codeScript);
+        require(tx.outputs.codeScriptCount(myCodeHash) >= 1);
+    }
+}

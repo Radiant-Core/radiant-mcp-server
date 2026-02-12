@@ -1,0 +1,62 @@
+pragma radiant ^2.0.0;
+
+// TokenGatedService — Access control for AI services using Glyph FT balance
+//
+// AI services can require users to hold a minimum balance of a specific
+// fungible token before granting access. The service verifies the token
+// balance on-chain — no centralized auth server needed.
+//
+// Flow:
+//   1. Service issues API credit tokens (Glyph FT)
+//   2. User presents their address to the AI service
+//   3. Service checks on-chain: does address hold >= minBalance of tokenRef?
+//   4. If yes, service responds; optionally burns tokens per query
+//
+// This contract manages the service-side token that gates access.
+// It enforces conservation and supports a "consume" function that
+// burns tokens on each API call (pay-per-query model).
+
+contract TokenGatedService(
+    bytes36 constant $serviceTokenRef,  // The API credit token reference
+    pubkey servicePk                    // Service operator's public key
+) {
+    // Standard transfer of service tokens between users
+    function transfer(sig s) {
+        require(checkSig(s, servicePk));
+
+        pushInputRef($serviceTokenRef);
+
+        int inputTokens = tx.inputs.refValueSum($serviceTokenRef);
+        int outputTokens = tx.outputs.refValueSum($serviceTokenRef);
+        require(inputTokens == outputTokens);
+    }
+
+    // Consume tokens for an API call
+    // Burns exactly `cost` photons worth of tokens per query
+    function consume(sig s, int cost) {
+        require(checkSig(s, servicePk));
+        require(cost > 0);
+
+        pushInputRef($serviceTokenRef);
+
+        int inputTokens = tx.inputs.refValueSum($serviceTokenRef);
+        int outputTokens = tx.outputs.refValueSum($serviceTokenRef);
+
+        // Tokens are burned: output < input by exactly `cost`
+        require(inputTokens - cost == outputTokens);
+
+        // Fee bounds using tx.state
+        int fee = tx.state.inputSum - tx.state.outputSum;
+        require(fee >= 0);
+        require(fee <= 1000000);  // Max 0.01 RXD fee
+    }
+
+    // Mint additional tokens (service operator only)
+    // Used to issue new API credits
+    function mint(sig s) {
+        require(checkSig(s, servicePk));
+        pushInputRef($serviceTokenRef);
+        // No conservation check — allows new tokens to be created
+        // Only the service operator can call this
+    }
+}

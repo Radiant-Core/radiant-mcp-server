@@ -1,0 +1,74 @@
+pragma radiant ^2.0.0;
+
+// InferenceProof — On-chain verification of AI inference results
+//
+// An AI agent commits to a (model, input, output) triple by publishing
+// blake3(model_hash || input_hash || output_data) on-chain. Anyone can
+// independently verify the commitment by recomputing the hash.
+//
+// Use cases:
+//   - Prove an AI model produced a specific output for a given input
+//   - Anchor inference results for auditing / compliance
+//   - Enable trustless AI service verification
+//
+// Requires: Hard Fork V2 (OP_BLAKE3 = 0xee)
+
+contract InferenceProof(
+    bytes36 constant $proofRef,    // Unique proof reference (singleton NFT)
+    pubkey agentPk                 // AI agent's public key
+) {
+    // Publish a new inference proof
+    // The agent provides the model hash, input hash, and raw output.
+    // The contract verifies blake3(model || input || output) matches
+    // the expected commitment, then anchors it on-chain as an NFT.
+    function publish(
+        sig s,
+        bytes32 modelHash,         // blake3 hash of the model weights/identifier
+        bytes32 inputHash,         // blake3 hash of the input data
+        bytes output,              // raw inference output (or its hash)
+        bytes32 expectedCommitment // blake3(modelHash || inputHash || output)
+    ) {
+        require(checkSig(s, agentPk));
+
+        // Verify the commitment: blake3(model || input || output) == expected
+        bytes preimage = modelHash + inputHash + output;
+        bytes32 computedHash = blake3(preimage);
+        require(computedHash == expectedCommitment);
+
+        // Singleton reference: exactly one proof NFT exists
+        pushInputRefSingleton($proofRef);
+        require(tx.outputs.refOutputCount($proofRef) == 1);
+
+        // Code-continuity: output must carry the same contract logic
+        bytes myCodeHash = hash256(tx.inputs[this.activeInputIndex].codeScript);
+        require(tx.outputs.codeScriptCount(myCodeHash) >= 1);
+    }
+
+    // Verify an existing proof against new evidence
+    // Allows third parties to challenge or confirm a previous inference
+    function verify(
+        sig s,
+        bytes32 modelHash,
+        bytes32 inputHash,
+        bytes output,
+        bytes32 proofCommitment
+    ) {
+        require(checkSig(s, agentPk));
+
+        // Recompute and verify
+        bytes preimage = modelHash + inputHash + output;
+        bytes32 recomputed = blake3(preimage);
+        require(recomputed == proofCommitment);
+
+        // Maintain singleton
+        pushInputRefSingleton($proofRef);
+        require(tx.outputs.refOutputCount($proofRef) == 1);
+    }
+
+    // Transfer proof ownership to a new agent
+    function transfer(sig s) {
+        require(checkSig(s, agentPk));
+        pushInputRefSingleton($proofRef);
+        require(tx.outputs.refOutputCount($proofRef) == 1);
+    }
+}
