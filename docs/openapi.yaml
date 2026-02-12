@@ -1,0 +1,556 @@
+openapi: 3.1.0
+info:
+  title: Radiant Blockchain REST API
+  description: |
+    REST API for the Radiant blockchain, wrapping ElectrumX and RXinDexer
+    Glyph/WAVE/dMint/Swap extension APIs.
+
+    **Base URL:** `http://localhost:3080/api`
+
+    All endpoints return JSON. Amounts are in photons (1 RXD = 100,000,000 photons)
+    unless otherwise noted.
+  version: 1.0.0
+  contact:
+    name: Radiant Core
+    url: https://github.com/Radiant-Core
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:3080/api
+    description: Local development
+
+tags:
+  - name: Blockchain
+    description: Chain state, blocks, transactions, fees
+  - name: Address
+    description: Balance, UTXOs, history for addresses
+  - name: Glyph
+    description: Glyph token queries (FT, NFT, dMint, etc.)
+  - name: dMint
+    description: Decentralized mining contracts
+  - name: WAVE
+    description: WAVE on-chain naming system
+  - name: Swap
+    description: On-chain DEX orderbook
+  - name: Utility
+    description: Address validation, protocol info
+
+paths:
+  /chain:
+    get:
+      operationId: getChainInfo
+      summary: Get blockchain status
+      tags: [Blockchain]
+      responses:
+        "200":
+          description: Current chain info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  height: { type: integer, example: 402710 }
+                  headerHex: { type: string }
+                  network: { type: string, example: mainnet }
+                  ticker: { type: string, example: RXD }
+
+  /block/{height}:
+    get:
+      operationId: getBlockHeader
+      summary: Get block header by height
+      tags: [Blockchain]
+      parameters:
+        - name: height
+          in: path
+          required: true
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: Block header hex
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  height: { type: integer }
+                  header: { type: string }
+
+  /tx/{txid}:
+    get:
+      operationId: getTransaction
+      summary: Get transaction details
+      tags: [Blockchain]
+      parameters:
+        - name: txid
+          in: path
+          required: true
+          schema: { type: string, minLength: 64, maxLength: 64 }
+      responses:
+        "200":
+          description: Transaction details
+          content:
+            application/json:
+              schema: { type: object }
+
+  /tx:
+    post:
+      operationId: broadcastTransaction
+      summary: Broadcast a signed raw transaction
+      tags: [Blockchain]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [raw_tx]
+              properties:
+                raw_tx: { type: string, description: Signed raw transaction hex }
+      responses:
+        "200":
+          description: Broadcast result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  txid: { type: string }
+
+  /fee:
+    get:
+      operationId: estimateFee
+      summary: Estimate transaction fee
+      tags: [Blockchain]
+      parameters:
+        - name: blocks
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 6 }
+      responses:
+        "200":
+          description: Fee estimate
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  targetBlocks: { type: integer }
+                  feePerKb: { type: string }
+
+  /address/{address}/balance:
+    get:
+      operationId: getBalance
+      summary: Get RXD balance for address
+      tags: [Address]
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+          description: Radiant address (base58check)
+      responses:
+        "200":
+          description: Balance in photons and RXD
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  address: { type: string }
+                  confirmed: { type: object, properties: { satoshis: { type: integer }, rxd: { type: string } } }
+                  unconfirmed: { type: object, properties: { satoshis: { type: integer }, rxd: { type: string } } }
+
+  /address/{address}/utxos:
+    get:
+      operationId: getUtxos
+      summary: List unspent outputs for address
+      tags: [Address]
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: UTXO list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  address: { type: string }
+                  count: { type: integer }
+                  utxos:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        txid: { type: string }
+                        vout: { type: integer }
+                        height: { type: integer }
+                        value: { type: object, properties: { satoshis: { type: integer }, rxd: { type: string } } }
+
+  /address/{address}/history:
+    get:
+      operationId: getHistory
+      summary: Get transaction history for address
+      tags: [Address]
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Transaction history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  address: { type: string }
+                  count: { type: integer }
+                  transactions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        txid: { type: string }
+                        height: { type: integer }
+                        confirmed: { type: boolean }
+
+  /address/{address}/tokens:
+    get:
+      operationId: listTokens
+      summary: List Glyph tokens held by address
+      tags: [Address, Glyph]
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        "200":
+          description: Token list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  address: { type: string }
+                  tokens: { type: array, items: { type: object } }
+
+  /token/{ref}:
+    get:
+      operationId: getToken
+      summary: Get Glyph token info by reference
+      tags: [Glyph]
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: { type: string }
+          description: Token reference (txid_vout format)
+      responses:
+        "200":
+          description: Token information
+          content:
+            application/json:
+              schema: { type: object }
+
+  /token/{ref}/metadata:
+    get:
+      operationId: getTokenMetadata
+      summary: Get full CBOR metadata for a token
+      tags: [Glyph]
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Parsed token metadata
+          content:
+            application/json:
+              schema: { type: object }
+
+  /token/{ref}/history:
+    get:
+      operationId: getTokenHistory
+      summary: Get transaction history for a token
+      tags: [Glyph]
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: Token history
+          content:
+            application/json:
+              schema: { type: object }
+
+  /tokens/search:
+    get:
+      operationId: searchTokens
+      summary: Search tokens by name or ticker
+      tags: [Glyph]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+          description: Search query
+        - name: protocols
+          in: query
+          schema: { type: string }
+          description: Comma-separated protocol IDs to filter
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema: { type: object }
+
+  /tokens/type/{typeId}:
+    get:
+      operationId: getTokensByType
+      summary: List tokens by type
+      tags: [Glyph]
+      parameters:
+        - name: typeId
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1, maximum: 11 }
+          description: "Token type: 1=FT, 2=NFT, 3=DAT, 4=dMint, 5=MUT, 6=BURN, 7=CONTAINER, 8=ENCRYPTED, 9=TIMELOCK, 10=AUTHORITY, 11=WAVE"
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: Tokens of specified type
+          content:
+            application/json:
+              schema: { type: object }
+
+  /dmint/contracts:
+    get:
+      operationId: getDmintContracts
+      summary: List active dMint contracts
+      tags: [dMint]
+      parameters:
+        - name: format
+          in: query
+          schema: { type: string, enum: [simple, extended], default: extended }
+      responses:
+        "200":
+          description: Mineable token contracts
+          content:
+            application/json:
+              schema: { type: object }
+
+  /dmint/contract/{ref}:
+    get:
+      operationId: getDmintContract
+      summary: Get dMint contract details
+      tags: [dMint]
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Contract details (difficulty, reward, algorithm, supply)
+          content:
+            application/json:
+              schema: { type: object }
+
+  /dmint/algorithm/{algoId}:
+    get:
+      operationId: getDmintByAlgorithm
+      summary: Get dMint contracts by mining algorithm
+      tags: [dMint]
+      parameters:
+        - name: algoId
+          in: path
+          required: true
+          schema: { type: integer, minimum: 0, maximum: 4 }
+          description: "Algorithm: 0=SHA256D, 1=BLAKE3, 2=K12"
+      responses:
+        "200":
+          description: Contracts for algorithm
+          content:
+            application/json:
+              schema: { type: object }
+
+  /dmint/profitable:
+    get:
+      operationId: getMostProfitable
+      summary: Get most profitable dMint contracts
+      tags: [dMint]
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 10 }
+      responses:
+        "200":
+          description: Contracts sorted by profitability
+          content:
+            application/json:
+              schema: { type: object }
+
+  /wave/resolve/{name}:
+    get:
+      operationId: resolveWaveName
+      summary: Resolve a WAVE name to zone records
+      tags: [WAVE]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+          description: WAVE name (e.g., alice, myapp)
+      responses:
+        "200":
+          description: Name resolution result
+          content:
+            application/json:
+              schema: { type: object }
+
+  /wave/available/{name}:
+    get:
+      operationId: checkWaveAvailable
+      summary: Check if a WAVE name is available
+      tags: [WAVE]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Availability status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: { type: string }
+                  available: { type: boolean }
+
+  /wave/{name}/subdomains:
+    get:
+      operationId: getWaveSubdomains
+      summary: List subdomains of a WAVE name
+      tags: [WAVE]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: Child names
+          content:
+            application/json:
+              schema: { type: object }
+
+  /wave/stats:
+    get:
+      operationId: getWaveStats
+      summary: Get WAVE naming system statistics
+      tags: [WAVE]
+      responses:
+        "200":
+          description: Naming system stats
+          content:
+            application/json:
+              schema: { type: object }
+
+  /swap/orders:
+    get:
+      operationId: getSwapOrders
+      summary: Get open swap orders for a trading pair
+      tags: [Swap]
+      parameters:
+        - name: sell
+          in: query
+          required: true
+          schema: { type: string }
+          description: Sell-side token ref (or 'rxd')
+        - name: buy
+          in: query
+          required: true
+          schema: { type: string }
+          description: Buy-side token ref (or 'rxd')
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: Open orders
+          content:
+            application/json:
+              schema: { type: object }
+
+  /validate/{address}:
+    get:
+      operationId: validateAddress
+      summary: Validate a Radiant address
+      tags: [Utility]
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  address: { type: string }
+                  valid: { type: boolean }
+                  type: { type: string, nullable: true, enum: [P2PKH, P2SH, null] }
+                  scripthash: { type: string, nullable: true }
+
+  /protocols:
+    get:
+      operationId: getProtocolInfo
+      summary: Get Glyph protocol type definitions
+      tags: [Utility]
+      responses:
+        "200":
+          description: Protocol definitions
+          content:
+            application/json:
+              schema: { type: object }
