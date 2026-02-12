@@ -4,7 +4,7 @@
 
 ## Features
 
-### 27 Tools across 6 categories:
+### 29 Tools across 6 categories:
 
 **Blockchain (8 tools)**
 - `radiant_get_chain_info` — Current chain status (height, tip, params)
@@ -33,7 +33,7 @@
 - `radiant_get_dmint_by_algorithm` — Filter by algorithm
 - `radiant_get_most_profitable_dmint` — Ranked by profitability
 
-**WAVE Naming (4 tools)**
+**WAVE Naming (5 tools)**
 - `radiant_resolve_wave_name` — Resolve name to records
 - `radiant_check_wave_available` — Check name availability
 - `radiant_wave_reverse_lookup` — Address to names
@@ -47,12 +47,36 @@
 - `radiant_get_protocol_info` — Protocol type reference
 - `radiant_validate_address` — Address validation
 
-### 5 Resources (static reference data):
+### 6 Resources (static reference data):
 - `radiant://docs/chain-overview` — Blockchain overview
 - `radiant://docs/opcodes` — Opcode reference (including V2)
 - `radiant://docs/protocols` — Glyph protocols, dMint algorithms, DAA modes
 - `radiant://docs/network-params` — Network parameters (JSON)
 - `radiant://docs/sdk-quickstart` — radiantjs quick start guide
+- `radiant://docs/knowledge-base` — Comprehensive AI knowledge base (13 sections)
+
+### REST API (25 HTTP endpoints)
+
+The same functionality is also available as a standard REST API for any HTTP client:
+
+```bash
+# Start REST server
+npm run start:rest
+
+# Query chain info
+curl http://localhost:3080/api/chain
+
+# Get address balance
+curl http://localhost:3080/api/address/1A1zP1.../balance
+
+# Search tokens
+curl http://localhost:3080/api/tokens/search?q=mytoken
+
+# Full endpoint list
+curl http://localhost:3080/api
+```
+
+OpenAPI 3.1 spec: `docs/openapi.yaml`
 
 ## Installation
 
@@ -112,34 +136,44 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 | `ELECTRUMX_PORT` | `50012` | ElectrumX server port |
 | `ELECTRUMX_SSL` | `true` | Use TLS connection |
 | `RADIANT_NETWORK` | `mainnet` | Network: `mainnet` or `testnet` |
+| `PORT` | `3080` | REST API server port |
+| `CORS_ORIGIN` | `*` | CORS allowed origin |
 
 ## Development
 
 ```bash
-# Run in development mode (with tsx)
+# MCP server (development)
 npm run dev
+
+# REST API server (development)
+npm run dev:rest
 
 # Type check
 npm run lint
 
 # Build
 npm run build
+
+# Run tests
+npx tsx test/smoke.ts   # MCP smoke test (no network)
+npx tsx test/live.ts    # MCP live test (ElectrumX)
+npx tsx test/rest.ts    # REST API test (ElectrumX)
 ```
 
 ## Architecture
 
 ```
-AI Agent (Windsurf/Claude/Cursor)
-       │ MCP Protocol (stdio)
-       ▼
-radiant-mcp-server
-  ├── Tools (27) — blockchain, tokens, dMint, WAVE, DEX, utility
-  ├── Resources (5) — static reference docs
-  └── ElectrumX Client (TCP/TLS)
-              │
-              ▼
-       RXinDexer / ElectrumX
-         (Glyph + WAVE + Swap APIs)
+AI Agent (Windsurf/Claude/Cursor)       Web App / HTTP Client
+       │ MCP Protocol (stdio)                  │ HTTP/REST
+       ▼                                       ▼
+radiant-mcp-server (index.ts)      radiant-rest-api (rest.ts)
+  ├── Tools (29)                     ├── 25 REST endpoints
+  ├── Resources (6)                  ├── OpenAPI 3.1 spec
+  └──────────┬───────────────────────┘
+             │ Shared ElectrumX Client (TCP/TLS)
+             ▼
+      RXinDexer / ElectrumX
+        (Glyph + WAVE + Swap + dMint APIs)
 ```
 
 ## About Radiant
