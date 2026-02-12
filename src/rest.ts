@@ -599,6 +599,64 @@ route("GET", "/health", async (_p, _q, _req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════
+//  ROUTES — Wallet
+// ════════════════════════════════════════════════════════════
+
+route("POST", "/wallet/create", async (_p, _q, req, res) => {
+  const body = JSON.parse(await readBody(req));
+  const network = body.network || "mainnet";
+  const { AgentWallet } = await import("./wallet.js");
+  if (body.mnemonic) {
+    const wc = (body.word_count || 12) as 12 | 15 | 18 | 21 | 24;
+    const { wallet, mnemonic, path } = AgentWallet.generateWithMnemonic(network, wc, body.passphrase || "", body.path || "m/44'/0'/0'/0/0");
+    json(res, { address: wallet.address, publicKey: wallet.getPublicKeyHex(), wif: wallet.getWIF(), mnemonic, derivationPath: path, network });
+  } else {
+    const wallet = AgentWallet.create(network);
+    json(res, { address: wallet.address, publicKey: wallet.getPublicKeyHex(), wif: wallet.getWIF(), network });
+  }
+});
+
+route("POST", "/wallet/restore", async (_p, _q, req, res) => {
+  const body = JSON.parse(await readBody(req));
+  if (!body.mnemonic) return error(res, "Missing mnemonic");
+  const { AgentWallet } = await import("./wallet.js");
+  const wallet = AgentWallet.fromMnemonic(body.mnemonic, body.network || "mainnet", body.passphrase || "", body.path || "m/44'/0'/0'/0/0");
+  json(res, { address: wallet.address, publicKey: wallet.getPublicKeyHex(), wif: wallet.getWIF(), derivationPath: body.path || "m/44'/0'/0'/0/0", network: body.network || "mainnet", valid: true });
+});
+
+// ════════════════════════════════════════════════════════════
+//  ROUTES — Decode / Swap History / Health
+// ════════════════════════════════════════════════════════════
+
+route("GET", "/tx/:txid/decode", async (p, _q, _req, res) => {
+  await ensureConnected();
+  const tx = await electrumx.getTransaction(p.txid, true);
+  json(res, tx);
+});
+
+route("GET", "/swap/history", async (_p, q, _req, res) => {
+  const ref = q.ref;
+  if (!ref) return error(res, "Missing ref query parameter");
+  await ensureConnected();
+  const limit = parseInt(q.limit || "100", 10);
+  const offset = parseInt(q.offset || "0", 10);
+  const history = await electrumx.requestWithRetry("swap.get_history", [ref, limit, offset]);
+  json(res, { ref, history });
+});
+
+route("GET", "/health", async (_p, _q, _req, res) => {
+  try {
+    await ensureConnected();
+    const latency = await electrumx.ping();
+    const status = latency >= 0 ? (latency < 2000 ? "healthy" : "degraded") : "unhealthy";
+    json(res, { status, electrumx: { connected: latency >= 0, latencyMs: latency }, network: NETWORK, timestamp: Date.now() });
+  } catch {
+    res.writeHead(503, { "Content-Type": "application/json", "Access-Control-Allow-Origin": CORS_ORIGIN });
+    res.end(JSON.stringify({ status: "unhealthy", electrumx: { connected: false, latencyMs: -1 }, network: NETWORK, timestamp: Date.now() }));
+  }
+});
+
+// ════════════════════════════════════════════════════════════
 //  SERVER
 // ════════════════════════════════════════════════════════════
 

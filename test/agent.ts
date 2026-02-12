@@ -280,6 +280,83 @@ async function main() {
     failed++;
   }
 
+  // ── Test 21: BIP39 mnemonic wallet generation ──
+  console.log("\nTest 21: BIP39 mnemonic wallet generation");
+  try {
+    const { wallet: mnWallet, mnemonic, path } = AgentWallet.generateWithMnemonic("mainnet", 12);
+    const words = mnemonic.split(" ");
+    assert(words.length === 12, `12 words: ${words.length}`);
+    assert(mnWallet.address.startsWith("1"), `mainnet address: ${mnWallet.address.slice(0, 6)}...`);
+    assert(path === "m/44'/0'/0'/0/0", `default path: ${path}`);
+    assert(mnWallet.getPublicKeyHex().length === 66, `pubkey length: ${mnWallet.getPublicKeyHex().length}`);
+
+    // Verify info includes mnemonic
+    const info = mnWallet.getInfo();
+    assert(info.mnemonic === mnemonic, `info has mnemonic`);
+    assert(info.derivationPath === path, `info has derivation path`);
+  } catch (err) {
+    console.error("  BIP39 generate error:", err);
+    failed++;
+  }
+
+  // ── Test 22: BIP39 mnemonic restore (deterministic) ──
+  console.log("\nTest 22: BIP39 mnemonic restore (deterministic)");
+  try {
+    const { wallet: w1, mnemonic: m1 } = AgentWallet.generateWithMnemonic("mainnet", 12);
+    const w2 = AgentWallet.fromMnemonic(m1, "mainnet");
+    assert(w2.address === w1.address, `restored address matches: ${w1.address.slice(0, 10)}...`);
+    assert(w2.getWIF() === w1.getWIF(), `restored WIF matches`);
+    assert(w2.getPublicKeyHex() === w1.getPublicKeyHex(), `restored pubkey matches`);
+  } catch (err) {
+    console.error("  BIP39 restore error:", err);
+    failed++;
+  }
+
+  // ── Test 23: BIP39 validation ──
+  console.log("\nTest 23: BIP39 mnemonic validation");
+  try {
+    const { mnemonic: validMnemonic } = AgentWallet.generateWithMnemonic("mainnet", 12);
+    assert(AgentWallet.validateMnemonic(validMnemonic) === true, `valid mnemonic accepted`);
+    assert(AgentWallet.validateMnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about") === true, `test vector accepted`);
+    assert(AgentWallet.validateMnemonic("invalid words that are not a real mnemonic at all ever") === false, `invalid mnemonic rejected`);
+    assert(AgentWallet.validateMnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon") === false, `bad checksum rejected`);
+  } catch (err) {
+    console.error("  BIP39 validation error:", err);
+    failed++;
+  }
+
+  // ── Test 24: BIP39 24-word mnemonic ──
+  console.log("\nTest 24: BIP39 24-word mnemonic");
+  try {
+    const { wallet: w24, mnemonic: m24 } = AgentWallet.generateWithMnemonic("mainnet", 24);
+    const words24 = m24.split(" ");
+    assert(words24.length === 24, `24 words: ${words24.length}`);
+    assert(w24.address.startsWith("1"), `address valid: ${w24.address.slice(0, 6)}...`);
+
+    // Restore with passphrase produces different address
+    const wPass = AgentWallet.fromMnemonic(m24, "mainnet", "mysecret");
+    assert(wPass.address !== w24.address, `passphrase changes derivation`);
+  } catch (err) {
+    console.error("  BIP39 24-word error:", err);
+    failed++;
+  }
+
+  // ── Test 25: BIP39 different derivation paths ──
+  console.log("\nTest 25: BIP39 different derivation paths");
+  try {
+    const { mnemonic: mPath } = AgentWallet.generateWithMnemonic("mainnet", 12);
+    const w0 = AgentWallet.fromMnemonic(mPath, "mainnet", "", "m/44'/0'/0'/0/0");
+    const w1 = AgentWallet.fromMnemonic(mPath, "mainnet", "", "m/44'/0'/0'/0/1");
+    assert(w0.address !== w1.address, `index 0 ≠ index 1`);
+
+    // Same path = same address
+    const w0again = AgentWallet.fromMnemonic(mPath, "mainnet", "", "m/44'/0'/0'/0/0");
+    assert(w0.address === w0again.address, `same path = same address`);
+  } catch (err) {
+    console.error("  BIP39 path error:", err);
+    failed++;
+  }
+
   // Summary
   console.log(`\n${"=".repeat(40)}`);
   console.log(`Agent SDK Test Results: ${passed} passed, ${failed} failed`);

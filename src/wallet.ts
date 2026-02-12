@@ -8,6 +8,10 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
+import { generateWalletFromMnemonic, restoreFromMnemonic, validateMnemonic, generateMnemonic } from "./bip39.js";
+import type { MnemonicResult } from "./bip39.js";
+
+export type { MnemonicResult };
 
 // ────────────────────────────────────────────────────────────
 // secp256k1 minimal (compressed pubkey derivation only)
@@ -105,6 +109,8 @@ export interface WalletInfo {
   publicKey: string;
   wif: string;
   network: "mainnet" | "testnet";
+  mnemonic?: string;
+  derivationPath?: string;
 }
 
 export class AgentWallet {
@@ -112,6 +118,9 @@ export class AgentWallet {
   readonly publicKey: Buffer;
   readonly address: string;
   readonly network: "mainnet" | "testnet";
+
+  private _mnemonic?: string;
+  private _derivationPath?: string;
 
   private constructor(privKey: Buffer, network: "mainnet" | "testnet") {
     const k = BigInt("0x" + privKey.toString("hex"));
@@ -155,6 +164,48 @@ export class AgentWallet {
     return b58check(this.network === "mainnet" ? 0x80 : 0xef, Buffer.concat([this.privKey, Buffer.from([0x01])]));
   }
 
+  /**
+   * Generate a new wallet with BIP39 mnemonic + BIP32 HD derivation.
+   * Returns the wallet plus the mnemonic (must be stored securely by the caller).
+   */
+  static generateWithMnemonic(
+    network: "mainnet" | "testnet" = "mainnet",
+    wordCount: 12 | 15 | 18 | 21 | 24 = 12,
+    passphrase = "",
+    path = "m/44'/0'/0'/0/0",
+  ): { wallet: AgentWallet; mnemonic: string; path: string } {
+    const result = generateWalletFromMnemonic(wordCount, passphrase, path);
+    const wallet = new AgentWallet(Buffer.from(result.privateKey, "hex"), network);
+    wallet._mnemonic = result.mnemonic;
+    wallet._derivationPath = result.path;
+    return { wallet, mnemonic: result.mnemonic, path: result.path };
+  }
+
+  /**
+   * Restore wallet from a BIP39 mnemonic phrase.
+   * @param mnemonic 12-24 word BIP39 mnemonic
+   * @param network mainnet or testnet
+   * @param passphrase optional BIP39 passphrase (not the wallet password)
+   * @param path BIP32 derivation path (default: m/44'/0'/0'/0/0)
+   */
+  static fromMnemonic(
+    mnemonic: string,
+    network: "mainnet" | "testnet" = "mainnet",
+    passphrase = "",
+    path = "m/44'/0'/0'/0/0",
+  ): AgentWallet {
+    const result = restoreFromMnemonic(mnemonic, passphrase, path);
+    const wallet = new AgentWallet(Buffer.from(result.privateKey, "hex"), network);
+    wallet._mnemonic = result.mnemonic;
+    wallet._derivationPath = result.path;
+    return wallet;
+  }
+
+  /** Check if a mnemonic is valid BIP39. */
+  static validateMnemonic(mnemonic: string): boolean {
+    return validateMnemonic(mnemonic);
+  }
+
   /** Get wallet info (safe to log — WIF shown, raw key hidden). */
   getInfo(): WalletInfo {
     return {
@@ -162,6 +213,8 @@ export class AgentWallet {
       publicKey: this.publicKey.toString("hex"),
       wif: this.getWIF(),
       network: this.network,
+      mnemonic: this._mnemonic,
+      derivationPath: this._derivationPath,
     };
   }
 

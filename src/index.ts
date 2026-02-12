@@ -716,13 +716,32 @@ server.tool(
 
 server.tool(
   "radiant_create_wallet",
-  "Generate a new Radiant wallet (random private key). Returns address, public key, and WIF-encoded private key. WARNING: Store the WIF securely — it controls all funds at this address.",
+  "Generate a new Radiant wallet. Supports two modes: (1) random key (fast, no mnemonic) or (2) BIP39 mnemonic with BIP32 HD derivation (12-24 words, recoverable). WARNING: Store the WIF/mnemonic securely.",
   {
     network: z.enum(["mainnet", "testnet"]).default("mainnet").describe("Network (mainnet or testnet)"),
+    mnemonic: z.boolean().default(false).describe("If true, generate a BIP39 mnemonic (12 words) with HD derivation instead of a random key"),
+    word_count: z.enum(["12", "15", "18", "21", "24"]).default("12").describe("Mnemonic word count (only used if mnemonic=true)"),
+    passphrase: z.string().default("").describe("Optional BIP39 passphrase (only used if mnemonic=true)"),
+    path: z.string().default("m/44'/0'/0'/0/0").describe("BIP32 derivation path (only used if mnemonic=true)"),
   },
-  async ({ network }) => {
+  async ({ network, mnemonic: useMnemonic, word_count, passphrase, path }) => {
     try {
       const { AgentWallet } = await import("./wallet.js");
+      if (useMnemonic) {
+        const wc = parseInt(word_count, 10) as 12 | 15 | 18 | 21 | 24;
+        const { wallet, mnemonic: phrase, path: derivPath } = AgentWallet.generateWithMnemonic(network, wc, passphrase, path);
+        return {
+          content: [jsonText({
+            address: wallet.address,
+            publicKey: wallet.getPublicKeyHex(),
+            wif: wallet.getWIF(),
+            mnemonic: phrase,
+            derivationPath: derivPath,
+            network,
+            note: "Store the mnemonic phrase securely — it can recover this wallet. The WIF is the derived private key.",
+          })],
+        };
+      }
       const wallet = AgentWallet.create(network);
       return {
         content: [jsonText({
@@ -731,6 +750,35 @@ server.tool(
           wif: wallet.getWIF(),
           network,
           note: "Store the WIF (Wallet Import Format) private key securely. Anyone with this key can spend funds at this address.",
+        })],
+      };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  },
+);
+
+server.tool(
+  "radiant_restore_wallet",
+  "Restore a Radiant wallet from a BIP39 mnemonic phrase. Validates the mnemonic checksum and derives the private key via BIP32 HD derivation.",
+  {
+    mnemonic: z.string().describe("BIP39 mnemonic phrase (12-24 words, space-separated)"),
+    network: z.enum(["mainnet", "testnet"]).default("mainnet").describe("Network"),
+    passphrase: z.string().default("").describe("Optional BIP39 passphrase"),
+    path: z.string().default("m/44'/0'/0'/0/0").describe("BIP32 derivation path"),
+  },
+  async ({ mnemonic, network, passphrase, path }) => {
+    try {
+      const { AgentWallet } = await import("./wallet.js");
+      const wallet = AgentWallet.fromMnemonic(mnemonic, network, passphrase, path);
+      return {
+        content: [jsonText({
+          address: wallet.address,
+          publicKey: wallet.getPublicKeyHex(),
+          wif: wallet.getWIF(),
+          derivationPath: path,
+          network,
+          valid: true,
         })],
       };
     } catch (err) {
