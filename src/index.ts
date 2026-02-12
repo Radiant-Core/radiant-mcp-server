@@ -13,6 +13,21 @@ import {
   DMINT_ALGORITHMS,
   NETWORK_PARAMS,
 } from "./references.js";
+import {
+  createInferenceProof,
+  verifyInferenceProof,
+  buildAgentProfile,
+  buildAgentWaveRecords,
+  parseAgentCapabilities,
+  checkTokenGatedAccess,
+  openChannel,
+  updateChannel,
+  channelSummary,
+  buildDataAssetMetadata,
+  computeProvenanceCommitment,
+  searchDataAssets,
+} from "./primitives.js";
+import type { DataAsset } from "./primitives.js";
 
 // ────────────────────────────────────────────────────────────
 // Configuration from environment
@@ -36,14 +51,37 @@ const electrumx = new ElectrumxClient({
 
 async function ensureConnected(): Promise<void> {
   if (!electrumx.isConnected()) {
-    await electrumx.connect();
-    await electrumx.serverVersion("radiant-mcp-server/1.0.0", "1.4");
+    try {
+      await electrumx.connect();
+      await electrumx.serverVersion("radiant-mcp-server/1.0.0", "1.4");
+    } catch (err) {
+      throw new Error(`ElectrumX connection failed (${ELECTRUMX_HOST}:${ELECTRUMX_PORT}): ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }
 
 function errorText(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+/** Classify errors for structured reporting. */
+function classifyError(err: unknown): { code: string; message: string; retryable: boolean } {
+  const msg = errorText(err);
+  if (msg.includes("timeout")) return { code: "TIMEOUT", message: msg, retryable: true };
+  if (msg.includes("ECONNREFUSED") || msg.includes("ECONNRESET")) return { code: "CONNECTION_ERROR", message: msg, retryable: true };
+  if (msg.includes("connection failed")) return { code: "CONNECTION_ERROR", message: msg, retryable: true };
+  if (msg.includes("Invalid") || msg.includes("invalid")) return { code: "INVALID_INPUT", message: msg, retryable: false };
+  if (msg.includes("not found") || msg.includes("Not found")) return { code: "NOT_FOUND", message: msg, retryable: false };
+  return { code: "INTERNAL_ERROR", message: msg, retryable: false };
+}
+
+function errorResponse(err: unknown) {
+  const classified = classifyError(err);
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify({ error: classified.code, message: classified.message, retryable: classified.retryable }) }],
+    isError: true,
+  };
 }
 
 function jsonText(data: unknown) {
@@ -85,7 +123,7 @@ server.tool(
         })],
       };
     } catch (err) {
-      return { content: [{ type: "text", text: `Error: ${errorText(err)}` }], isError: true };
+      return errorResponse(err);
     }
   },
 );
@@ -114,7 +152,7 @@ server.tool(
         })],
       };
     } catch (err) {
-      return { content: [{ type: "text", text: `Error: ${errorText(err)}` }], isError: true };
+      return errorResponse(err);
     }
   },
 );
@@ -146,7 +184,7 @@ server.tool(
         })],
       };
     } catch (err) {
-      return { content: [{ type: "text", text: `Error: ${errorText(err)}` }], isError: true };
+      return errorResponse(err);
     }
   },
 );
@@ -177,7 +215,7 @@ server.tool(
         })],
       };
     } catch (err) {
-      return { content: [{ type: "text", text: `Error: ${errorText(err)}` }], isError: true };
+      return errorResponse(err);
     }
   },
 );
@@ -194,7 +232,7 @@ server.tool(
       const tx = await electrumx.getTransaction(txid, true);
       return { content: [jsonText(tx)] };
     } catch (err) {
-      return { content: [{ type: "text", text: `Error: ${errorText(err)}` }], isError: true };
+      return errorResponse(err);
     }
   },
 );
@@ -211,7 +249,7 @@ server.tool(
       const header = await electrumx.getBlockHeader(height);
       return { content: [jsonText({ height, header })] };
     } catch (err) {
-      return { content: [{ type: "text", text: `Error: ${errorText(err)}` }], isError: true };
+      return errorResponse(err);
     }
   },
 );
@@ -234,7 +272,7 @@ server.tool(
         })],
       };
     } catch (err) {
-      return { content: [{ type: "text", text: `Error: ${errorText(err)}` }], isError: true };
+      return errorResponse(err);
     }
   },
 );
@@ -676,6 +714,396 @@ server.tool(
   },
 );
 
+server.tool(
+  "radiant_create_wallet",
+  "Generate a new Radiant wallet (random private key). Returns address, public key, and WIF-encoded private key. WARNING: Store the WIF securely — it controls all funds at this address.",
+  {
+    network: z.enum(["mainnet", "testnet"]).default("mainnet").describe("Network (mainnet or testnet)"),
+  },
+  async ({ network }) => {
+    try {
+      const { AgentWallet } = await import("./wallet.js");
+      const wallet = AgentWallet.create(network);
+      return {
+        content: [jsonText({
+          address: wallet.address,
+          publicKey: wallet.getPublicKeyHex(),
+          wif: wallet.getWIF(),
+          network,
+          note: "Store the WIF (Wallet Import Format) private key securely. Anyone with this key can spend funds at this address.",
+        })],
+      };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  },
+);
+
+server.tool(
+  "radiant_decode_transaction",
+  "Decode a raw transaction hex into its human-readable components (inputs, outputs, values). Fetches the transaction from ElectrumX in verbose mode.",
+  {
+    txid: z.string().length(64).describe("Transaction ID (64 hex chars)"),
+  },
+  async ({ txid }) => {
+    try {
+      await ensureConnected();
+      const tx = await electrumx.getTransaction(txid, true);
+      return { content: [jsonText(tx)] };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  },
+);
+
+server.tool(
+  "radiant_get_swap_history",
+  "Get trade history for a token on the on-chain DEX",
+  {
+    ref: z.string().describe("Token reference (txid_vout format)"),
+    limit: z.number().int().min(1).max(500).default(100).describe("Max results"),
+    offset: z.number().int().min(0).default(0).describe("Offset for pagination"),
+  },
+  async ({ ref, limit, offset }) => {
+    try {
+      await ensureConnected();
+      const history = await electrumx.requestWithRetry("swap.get_history", [ref, limit, offset]);
+      return { content: [jsonText({ ref, history })] };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  },
+);
+
+server.tool(
+  "radiant_connection_health",
+  "Check ElectrumX connection health: latency, connection status, and server info",
+  {},
+  async () => {
+    try {
+      await ensureConnected();
+      const latency = await electrumx.ping();
+      const tip = await electrumx.headersSubscribe();
+      return {
+        content: [jsonText({
+          status: latency >= 0 ? "healthy" : "degraded",
+          electrumx: {
+            host: ELECTRUMX_HOST,
+            port: ELECTRUMX_PORT,
+            ssl: ELECTRUMX_SSL,
+            connected: electrumx.isConnected(),
+            latencyMs: latency,
+          },
+          chain: { height: tip.height, network: NETWORK },
+          timestamp: Date.now(),
+        })],
+      };
+    } catch (err) {
+      return {
+        content: [jsonText({
+          status: "unhealthy",
+          electrumx: { host: ELECTRUMX_HOST, port: ELECTRUMX_PORT, connected: false },
+          error: errorText(err),
+          timestamp: Date.now(),
+        })],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ════════════════════════════════════════════════════════════
+//  TOOLS — Phase 5: On-Chain AI Primitives
+// ════════════════════════════════════════════════════════════
+
+// ─── 5.1 Inference Proofs ───
+
+server.tool(
+  "radiant_create_inference_proof",
+  "Create a blake3 inference proof commitment: hash(modelHash || inputHash || output). Used to record AI inference results on-chain via the InferenceProof contract.",
+  {
+    model_hash: z.string().length(64).describe("Blake3 hash of the model weights (64 hex chars)"),
+    input_hash: z.string().length(64).describe("Blake3 hash of the input data (64 hex chars)"),
+    output_hex: z.string().describe("Inference output as hex string"),
+  },
+  async ({ model_hash, input_hash, output_hex }) => {
+    try {
+      const output = Buffer.from(output_hex, "hex");
+      const proof = createInferenceProof(model_hash, input_hash, output);
+      return {
+        content: [jsonText({
+          modelHash: proof.modelHash,
+          inputHash: proof.inputHash,
+          commitment: proof.commitment,
+          timestamp: proof.timestamp,
+          note: "Publish this commitment on-chain via the InferenceProof contract to create a verifiable inference record.",
+        })],
+      };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Error: ${errorText(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  "radiant_verify_inference_proof",
+  "Verify an inference proof commitment off-chain. Checks that blake3(modelHash || inputHash || output) matches the expected commitment.",
+  {
+    model_hash: z.string().length(64).describe("Blake3 hash of the model weights"),
+    input_hash: z.string().length(64).describe("Blake3 hash of the input data"),
+    output_hex: z.string().describe("Inference output as hex string"),
+    commitment: z.string().length(64).describe("Expected commitment hash (64 hex chars)"),
+  },
+  async ({ model_hash, input_hash, output_hex, commitment }) => {
+    try {
+      const output = Buffer.from(output_hex, "hex");
+      const valid = verifyInferenceProof(model_hash, input_hash, output, commitment);
+      return {
+        content: [jsonText({
+          valid,
+          modelHash: model_hash,
+          inputHash: input_hash,
+          commitment,
+          message: valid ? "Inference proof is valid" : "Inference proof FAILED verification — data has been tampered with",
+        })],
+      };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Error: ${errorText(err)}` }], isError: true };
+    }
+  },
+);
+
+// ─── 5.2 Agent Identity ───
+
+server.tool(
+  "radiant_build_agent_profile",
+  "Build an AI agent identity profile with blake3 commitment, suitable for on-chain registration via the AgentIdentity contract and WAVE naming system.",
+  {
+    address: z.string().describe("Agent's Radiant payment address"),
+    description: z.string().describe("Human-readable description of the agent"),
+    api_url: z.string().optional().describe("API endpoint URL"),
+    capabilities: z.array(z.string()).describe("List of agent capabilities (e.g., ['research', 'translate', 'code'])"),
+    pricing: z.string().optional().describe("Pricing info (e.g., '100sat/query')"),
+    model: z.string().optional().describe("AI model identifier (e.g., 'gpt-4-turbo')"),
+    wave_name: z.string().optional().describe("WAVE name to register (e.g., 'myagent')"),
+  },
+  async ({ address, description, api_url, capabilities, pricing, model, wave_name }) => {
+    try {
+      const profile = buildAgentProfile({
+        address,
+        description,
+        apiUrl: api_url,
+        capabilities,
+        pricing,
+        model,
+        waveName: wave_name,
+      });
+      const waveRecords = buildAgentWaveRecords(profile);
+      return {
+        content: [jsonText({
+          profile,
+          waveRecords,
+          note: "Use waveRecords as WAVE zone data when registering the agent's name. The profileCommitment is stored on-chain via the AgentIdentity contract.",
+        })],
+      };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Error: ${errorText(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  "radiant_resolve_agent_identity",
+  "Resolve an AI agent's identity from its WAVE name. Returns parsed capabilities, pricing, and API endpoint.",
+  {
+    wave_name: z.string().describe("Agent's WAVE name"),
+  },
+  async ({ wave_name }) => {
+    try {
+      await ensureConnected();
+      const result = await electrumx.waveResolve(wave_name);
+      if (!result) {
+        return { content: [jsonText({ wave_name, found: false, message: "Agent not found" })] };
+      }
+      const zone = (result as { zone?: Record<string, unknown> }).zone || result as Record<string, unknown>;
+      const agentProfile = parseAgentCapabilities(zone);
+      return {
+        content: [jsonText({
+          wave_name,
+          found: true,
+          agent: agentProfile,
+          rawZone: zone,
+        })],
+      };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Error: ${errorText(err)}` }], isError: true };
+    }
+  },
+);
+
+// ─── 5.3 Token-Gated Access ───
+
+server.tool(
+  "radiant_check_token_access",
+  "Check if an address holds sufficient Glyph tokens to access a gated service (TokenGatedService contract pattern).",
+  {
+    address: z.string().describe("Address to check"),
+    token_ref: z.string().describe("Service token reference (txid_vout)"),
+    min_balance: z.number().int().min(1).describe("Minimum token balance required (in photons)"),
+  },
+  async ({ address, token_ref, min_balance }) => {
+    try {
+      await ensureConnected();
+      const result = await checkTokenGatedAccess(electrumx, address, token_ref.replace(":", "_"), min_balance);
+      return { content: [jsonText(result)] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Error: ${errorText(err)}` }], isError: true };
+    }
+  },
+);
+
+// ─── 5.4 Micropayment Channels ───
+
+server.tool(
+  "radiant_open_channel",
+  "Create initial state for a micropayment channel between two agents (MicropaymentChannel contract pattern).",
+  {
+    channel_id: z.string().describe("Channel ID (typically the funding txid)"),
+    agent_a: z.string().describe("Payer's public key hex (compressed, 66 chars)"),
+    agent_b: z.string().describe("Payee's public key hex (compressed, 66 chars)"),
+    capacity: z.number().int().min(1).describe("Total locked amount in photons"),
+    timeout_blocks: z.number().int().min(1).default(1008).describe("Timeout in blocks before payer can reclaim (default: 1008 ≈ 3.5 days)"),
+  },
+  async ({ channel_id, agent_a, agent_b, capacity, timeout_blocks }) => {
+    try {
+      const state = openChannel(channel_id, agent_a, agent_b, capacity, timeout_blocks);
+      return {
+        content: [jsonText({
+          ...state,
+          summary: channelSummary(state),
+          note: "Sign state updates off-chain. Either party can close the channel on-chain with the latest signed state.",
+        })],
+      };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Error: ${errorText(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  "radiant_update_channel",
+  "Update a micropayment channel state: transfer photons from payer (agentA) to payee (agentB).",
+  {
+    channel_id: z.string().describe("Channel ID"),
+    agent_a: z.string().describe("Payer's public key hex"),
+    agent_b: z.string().describe("Payee's public key hex"),
+    capacity: z.number().int().describe("Total channel capacity in photons"),
+    balance_a: z.number().int().describe("Current agentA balance in photons"),
+    balance_b: z.number().int().describe("Current agentB balance in photons"),
+    nonce: z.number().int().describe("Current state nonce"),
+    timeout_blocks: z.number().int().describe("Timeout in blocks"),
+    payment_amount: z.number().int().min(1).describe("Amount to transfer from agentA to agentB (photons)"),
+  },
+  async ({ channel_id, agent_a, agent_b, capacity, balance_a, balance_b, nonce, timeout_blocks, payment_amount }) => {
+    try {
+      const currentState = {
+        channelId: channel_id,
+        agentA: agent_a,
+        agentB: agent_b,
+        capacity,
+        balanceA: balance_a,
+        balanceB: balance_b,
+        nonce,
+        timeoutBlocks: timeout_blocks,
+        stateCommitment: "",
+      };
+      const newState = updateChannel(currentState, payment_amount);
+      return {
+        content: [jsonText({
+          ...newState,
+          summary: channelSummary(newState),
+        })],
+      };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Error: ${errorText(err)}` }], isError: true };
+    }
+  },
+);
+
+// ─── 5.5 Data Marketplace ───
+
+server.tool(
+  "radiant_build_data_asset",
+  "Build Glyph NFT metadata for a data marketplace asset (DataMarketplace contract pattern). Returns CBOR-ready metadata structure.",
+  {
+    ref: z.string().describe("NFT reference for this asset"),
+    type: z.enum(["dataset", "model", "collection", "computation"]).describe("Asset type"),
+    name: z.string().describe("Asset name"),
+    description: z.string().describe("Asset description"),
+    content_hash: z.string().length(64).describe("Blake3 hash of the content (64 hex chars)"),
+    size_bytes: z.number().int().optional().describe("Content size in bytes"),
+    mime_type: z.string().optional().describe("MIME type"),
+    price: z.number().int().min(0).describe("Price in photons (0 = free/open)"),
+    derived_from: z.array(z.string()).optional().describe("Parent dataset refs (for provenance)"),
+    license: z.string().optional().describe("License terms (e.g., 'CC-BY-4.0')"),
+  },
+  async ({ ref, type, name, description, content_hash, size_bytes, mime_type, price, derived_from, license }) => {
+    try {
+      const asset: DataAsset = {
+        ref,
+        type,
+        name,
+        description,
+        contentHash: content_hash,
+        sizeBytes: size_bytes,
+        mimeType: mime_type,
+        price,
+        derivedFrom: derived_from,
+        license,
+      };
+      const metadata = buildDataAssetMetadata(asset);
+
+      // Compute provenance if derived
+      let provenanceCommitment: string | undefined;
+      if (derived_from?.length) {
+        provenanceCommitment = computeProvenanceCommitment(
+          derived_from.map((r) => content_hash), // use content hashes as parent hashes
+          `derived:${type}:${name}`,
+        );
+      }
+
+      return {
+        content: [jsonText({
+          metadata,
+          provenanceCommitment,
+          note: "CBOR-encode this metadata for a Glyph commit-reveal token creation. The x-content-hash field enables buyers to verify data integrity.",
+        })],
+      };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Error: ${errorText(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  "radiant_search_data_assets",
+  "Search the data marketplace for datasets, models, and other data assets (NFTs with DAT protocol).",
+  {
+    query: z.string().describe("Search query"),
+    type: z.enum(["dataset", "model", "collection", "computation"]).optional().describe("Filter by asset type"),
+    limit: z.number().int().min(1).max(200).default(50).describe("Max results"),
+  },
+  async ({ query, type, limit }) => {
+    try {
+      await ensureConnected();
+      const results = await searchDataAssets(electrumx, query, type, limit);
+      return { content: [jsonText({ query, type, results })] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Error: ${errorText(err)}` }], isError: true };
+    }
+  },
+);
+
 // ════════════════════════════════════════════════════════════
 //  RESOURCES — Static reference data
 // ════════════════════════════════════════════════════════════
@@ -821,6 +1249,93 @@ server.resource(
     return {
       contents: [{ uri: "radiant://docs/knowledge-base", text, mimeType: "text/markdown" }],
     };
+  },
+);
+
+// ════════════════════════════════════════════════════════════
+//  RESOURCES — Dynamic (live data)
+// ════════════════════════════════════════════════════════════
+
+server.resource(
+  "chain-status",
+  "radiant://chain/status",
+  {
+    description: "Live chain status: current height, tip hash, sync state",
+    mimeType: "application/json",
+  },
+  async () => {
+    try {
+      await ensureConnected();
+      const tip = await electrumx.headersSubscribe();
+      const fee = await electrumx.estimateFee(6);
+      return {
+        contents: [{
+          uri: "radiant://chain/status",
+          text: JSON.stringify({ height: tip.height, headerHex: tip.hex, network: NETWORK, feePerKb: fee, timestamp: Date.now() }, null, 2),
+          mimeType: "application/json",
+        }],
+      };
+    } catch {
+      return { contents: [{ uri: "radiant://chain/status", text: JSON.stringify({ error: "not connected" }), mimeType: "application/json" }] };
+    }
+  },
+);
+
+server.resource(
+  "dmint-active",
+  "radiant://dmint/active",
+  {
+    description: "Currently active dMint (decentralized mining) contracts",
+    mimeType: "application/json",
+  },
+  async () => {
+    try {
+      await ensureConnected();
+      const contracts = await electrumx.requestWithRetry("dmint.get_contracts", ["extended"]);
+      return {
+        contents: [{
+          uri: "radiant://dmint/active",
+          text: JSON.stringify(contracts, null, 2),
+          mimeType: "application/json",
+        }],
+      };
+    } catch {
+      return { contents: [{ uri: "radiant://dmint/active", text: JSON.stringify({ error: "unavailable" }), mimeType: "application/json" }] };
+    }
+  },
+);
+
+server.resource(
+  "network-fees",
+  "radiant://network/fees",
+  {
+    description: "Current fee estimates for various confirmation targets",
+    mimeType: "application/json",
+  },
+  async () => {
+    try {
+      await ensureConnected();
+      const [fee1, fee3, fee6, fee12] = await Promise.all([
+        electrumx.estimateFee(1),
+        electrumx.estimateFee(3),
+        electrumx.estimateFee(6),
+        electrumx.estimateFee(12),
+      ]);
+      return {
+        contents: [{
+          uri: "radiant://network/fees",
+          text: JSON.stringify({
+            fees: { "1_block": fee1, "3_blocks": fee3, "6_blocks": fee6, "12_blocks": fee12 },
+            unit: "RXD/kB",
+            note: "Radiant has very low fees, typically ~0.001 RXD per standard transaction",
+            timestamp: Date.now(),
+          }, null, 2),
+          mimeType: "application/json",
+        }],
+      };
+    } catch {
+      return { contents: [{ uri: "radiant://network/fees", text: JSON.stringify({ error: "unavailable" }), mimeType: "application/json" }] };
+    }
   },
 );
 

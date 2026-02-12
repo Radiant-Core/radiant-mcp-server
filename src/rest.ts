@@ -22,6 +22,21 @@ import {
   DMINT_ALGORITHMS,
   NETWORK_PARAMS,
 } from "./references.js";
+import {
+  createInferenceProof,
+  verifyInferenceProof,
+  buildAgentProfile,
+  buildAgentWaveRecords,
+  parseAgentCapabilities,
+  checkTokenGatedAccess,
+  openChannel,
+  updateChannel,
+  channelSummary,
+  buildDataAssetMetadata,
+  computeProvenanceCommitment,
+  searchDataAssets,
+} from "./primitives.js";
+import type { DataAsset } from "./primitives.js";
 
 // ────────────────────────────────────────────────────────────
 // Configuration
@@ -443,6 +458,144 @@ route("GET", "/docs/protocols", async (_p, _q, _req, res) => {
     "Access-Control-Allow-Origin": CORS_ORIGIN,
   });
   res.end(getProtocolReference());
+});
+
+// ════════════════════════════════════════════════════════════
+//  ROUTES — Phase 5: AI Primitives
+// ════════════════════════════════════════════════════════════
+
+// ─── Inference Proofs ───
+
+route("POST", "/inference/proof", async (_p, _q, req, res) => {
+  const body = JSON.parse(await readBody(req));
+  const { model_hash, input_hash, output_hex } = body;
+  if (!model_hash || !input_hash || !output_hex) return error(res, "Missing model_hash, input_hash, or output_hex");
+  const output = Buffer.from(output_hex, "hex");
+  const proof = createInferenceProof(model_hash, input_hash, output);
+  json(res, { modelHash: proof.modelHash, inputHash: proof.inputHash, commitment: proof.commitment, timestamp: proof.timestamp });
+});
+
+route("POST", "/inference/verify", async (_p, _q, req, res) => {
+  const body = JSON.parse(await readBody(req));
+  const { model_hash, input_hash, output_hex, commitment } = body;
+  if (!model_hash || !input_hash || !output_hex || !commitment) return error(res, "Missing required fields");
+  const output = Buffer.from(output_hex, "hex");
+  const valid = verifyInferenceProof(model_hash, input_hash, output, commitment);
+  json(res, { valid, commitment, message: valid ? "Proof valid" : "Proof FAILED verification" });
+});
+
+// ─── Agent Identity ───
+
+route("POST", "/identity/profile", async (_p, _q, req, res) => {
+  const body = JSON.parse(await readBody(req));
+  if (!body.address || !body.description || !body.capabilities) return error(res, "Missing address, description, or capabilities");
+  const profile = buildAgentProfile({
+    address: body.address,
+    description: body.description,
+    apiUrl: body.api_url,
+    capabilities: body.capabilities,
+    pricing: body.pricing,
+    model: body.model,
+    waveName: body.wave_name,
+  });
+  const waveRecords = buildAgentWaveRecords(profile);
+  json(res, { profile, waveRecords });
+});
+
+route("GET", "/identity/resolve/:name", async (p, _q, _req, res) => {
+  await ensureConnected();
+  const result = await electrumx.waveResolve(p.name);
+  if (!result) { json(res, { wave_name: p.name, found: false }); return; }
+  const zone = (result as { zone?: Record<string, unknown> }).zone || result as Record<string, unknown>;
+  const agentProfile = parseAgentCapabilities(zone);
+  json(res, { wave_name: p.name, found: true, agent: agentProfile, rawZone: zone });
+});
+
+// ─── Token-Gated Access ───
+
+route("GET", "/access/check/:address/:tokenRef", async (p, q, _req, res) => {
+  if (!isValidAddress(p.address)) return error(res, "Invalid address");
+  const minBalance = parseInt(q.min_balance || "1", 10);
+  await ensureConnected();
+  const result = await checkTokenGatedAccess(electrumx, p.address, p.tokenRef.replace(":", "_"), minBalance);
+  json(res, result);
+});
+
+// ─── Micropayment Channels ───
+
+route("POST", "/channel/open", async (_p, _q, req, res) => {
+  const body = JSON.parse(await readBody(req));
+  if (!body.channel_id || !body.agent_a || !body.agent_b || !body.capacity) return error(res, "Missing required fields");
+  const state = openChannel(body.channel_id, body.agent_a, body.agent_b, body.capacity, body.timeout_blocks || 1008);
+  json(res, { ...state, summary: channelSummary(state) });
+});
+
+route("POST", "/channel/update", async (_p, _q, req, res) => {
+  const body = JSON.parse(await readBody(req));
+  if (!body.channel_id || body.balance_a === undefined || body.payment_amount === undefined) return error(res, "Missing required fields");
+  const currentState = {
+    channelId: body.channel_id,
+    agentA: body.agent_a,
+    agentB: body.agent_b,
+    capacity: body.capacity,
+    balanceA: body.balance_a,
+    balanceB: body.balance_b,
+    nonce: body.nonce || 0,
+    timeoutBlocks: body.timeout_blocks || 1008,
+    stateCommitment: "",
+  };
+  const newState = updateChannel(currentState, body.payment_amount);
+  json(res, { ...newState, summary: channelSummary(newState) });
+});
+
+// ─── Data Marketplace ───
+
+route("POST", "/marketplace/asset", async (_p, _q, req, res) => {
+  const body = JSON.parse(await readBody(req));
+  if (!body.ref || !body.type || !body.name || !body.content_hash) return error(res, "Missing required fields");
+  const asset: DataAsset = {
+    ref: body.ref,
+    type: body.type,
+    name: body.name,
+    description: body.description || "",
+    contentHash: body.content_hash,
+    sizeBytes: body.size_bytes,
+    mimeType: body.mime_type,
+    price: body.price || 0,
+    derivedFrom: body.derived_from,
+    license: body.license,
+  };
+  const metadata = buildDataAssetMetadata(asset);
+  let provenanceCommitment: string | undefined;
+  if (body.derived_from?.length) {
+    provenanceCommitment = computeProvenanceCommitment(body.derived_from, `derived:${body.type}:${body.name}`);
+  }
+  json(res, { metadata, provenanceCommitment });
+});
+
+route("GET", "/marketplace/search", async (_p, q, _req, res) => {
+  if (!q.q) return error(res, "Missing query parameter 'q'");
+  const limit = parseInt(q.limit || "50", 10);
+  await ensureConnected();
+  const results = await searchDataAssets(electrumx, q.q, q.type as DataAsset["type"] | undefined, limit);
+  json(res, { query: q.q, type: q.type, results });
+});
+
+// ─── Health Check ───
+
+route("GET", "/health", async (_p, _q, _req, res) => {
+  try {
+    await ensureConnected();
+    const latency = await electrumx.ping();
+    json(res, {
+      status: latency >= 0 ? "healthy" : "degraded",
+      electrumx: { connected: electrumx.isConnected(), latencyMs: latency },
+      network: NETWORK,
+      timestamp: Date.now(),
+    });
+  } catch {
+    json(res, { status: "unhealthy", electrumx: { connected: false }, network: NETWORK, timestamp: Date.now() }, 503);
+  }
 });
 
 // ════════════════════════════════════════════════════════════

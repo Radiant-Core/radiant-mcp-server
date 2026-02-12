@@ -7,6 +7,12 @@ export interface ElectrumxConfig {
   port: number;
   ssl: boolean;
   timeout?: number;
+  /** Max reconnect attempts before giving up. 0 = no reconnect. Default: 5 */
+  maxReconnectAttempts?: number;
+  /** Base delay between reconnect attempts in ms. Default: 1000 */
+  reconnectBaseDelay?: number;
+  /** Number of times to retry a failed request. Default: 2 */
+  maxRetries?: number;
 }
 
 interface PendingRequest {
@@ -27,11 +33,16 @@ export class ElectrumxClient extends EventEmitter {
   private pending = new Map<number, PendingRequest>();
   private connected = false;
   private reconnecting = false;
+  private reconnectAttempts = 0;
+  private lastPingTime = 0;
 
   constructor(config: ElectrumxConfig) {
     super();
     this.config = {
       timeout: 30_000,
+      maxReconnectAttempts: 5,
+      reconnectBaseDelay: 1000,
+      maxRetries: 2,
       ...config,
     };
   }
@@ -162,8 +173,83 @@ export class ElectrumxClient extends EventEmitter {
   }
 
   private onClose(): void {
+    const wasConnected = this.connected;
     this.connected = false;
     this.emit("disconnected");
+    if (wasConnected && !this.reconnecting && this.config.maxReconnectAttempts! > 0) {
+      this.autoReconnect();
+    }
+  }
+
+  private async autoReconnect(): Promise<void> {
+    if (this.reconnecting) return;
+    this.reconnecting = true;
+    const maxAttempts = this.config.maxReconnectAttempts!;
+    while (this.reconnectAttempts < maxAttempts && !this.connected) {
+      this.reconnectAttempts++;
+      const delay = this.config.reconnectBaseDelay! * Math.pow(2, this.reconnectAttempts - 1);
+      this.emit("reconnecting", { attempt: this.reconnectAttempts, maxAttempts, delayMs: delay });
+      await new Promise((r) => setTimeout(r, delay));
+      try {
+        if (this.socket) { this.socket.removeAllListeners(); this.socket.destroy(); this.socket = null; }
+        await this.connect();
+        await this.serverVersion();
+        this.reconnectAttempts = 0;
+        this.emit("reconnected");
+        return;
+      } catch {
+        // Will retry
+      }
+    }
+    this.reconnecting = false;
+    if (!this.connected) {
+      this.emit("reconnect_failed", { attempts: this.reconnectAttempts });
+    }
+  }
+
+  /**
+   * Send a request with automatic retry on transient failures.
+   */
+  async requestWithRetry<T = unknown>(method: string, params: unknown[] = []): Promise<T> {
+    const maxRetries = this.config.maxRetries!;
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await this.request<T>(method, params);
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        const isTransient = lastError.message.includes("timeout") ||
+          lastError.message.includes("ECONNRESET") ||
+          lastError.message.includes("disconnected") ||
+          lastError.message.includes("socket");
+        if (!isTransient || attempt === maxRetries) throw lastError;
+        // Wait briefly before retry
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        // Ensure reconnected
+        if (!this.connected) await this.connect();
+      }
+    }
+    throw lastError;
+  }
+
+  /**
+   * Ping the server to check connection health.
+   * Returns latency in ms, or -1 if unreachable.
+   */
+  async ping(): Promise<number> {
+    const start = Date.now();
+    try {
+      await this.request("server.ping", []);
+      this.lastPingTime = Date.now() - start;
+      return this.lastPingTime;
+    } catch {
+      return -1;
+    }
+  }
+
+  /** Get the last measured ping latency in ms. */
+  getLastPingTime(): number {
+    return this.lastPingTime;
   }
 
   // ──────────────────────────────────────────────

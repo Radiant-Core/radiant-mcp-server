@@ -170,6 +170,116 @@ async function main() {
   warnAgent.recordSpend(85_00000000); // 85% of limit → triggers warning
   assert(warningReceived, "spend-limit-warning event emitted at 85%");
 
+  // ─── Test 16: Audit Logging ───
+  console.log("\nTest 16: Audit logging");
+  const auditAgent = new RadiantAgent({ spendLimitPerHour: 1000_00000000 });
+  auditAgent.createWallet();
+  let auditEventReceived = false;
+  auditAgent.on("audit", () => { auditEventReceived = true; });
+
+  // Create a session key to trigger audit
+  auditAgent.createSessionKey(["read", "query"], 60_000);
+  assert(auditEventReceived, "audit event emitted on session key creation");
+
+  const auditLog = auditAgent.getAuditLog();
+  assert(auditLog.length >= 1, `audit log has ${auditLog.length} entries`);
+  assert(auditLog[0].action === "session_key_created", `first entry: ${auditLog[0].action}`);
+  assert(auditLog[0].success === true, "audit entry marked success");
+
+  // Filter by action
+  const filtered = auditAgent.getAuditLog({ action: "session_key_created" });
+  assert(filtered.length === 1, "filtered audit log has 1 entry");
+
+  // Clear
+  auditAgent.clearAuditLog();
+  assert(auditAgent.getAuditLog().length === 0, "audit log cleared");
+
+  // ─── Test 17: Session Keys ───
+  console.log("\nTest 17: Session keys");
+  const sessionAgent = new RadiantAgent();
+  sessionAgent.createWallet();
+
+  // No session key initially
+  assert(sessionAgent.getSessionKey() === null, "no session key initially");
+  assert(sessionAgent.sessionHasPermission("read") === false, "no permission without session");
+
+  // Create session key
+  const sessionInfo = sessionAgent.createSessionKey(["read", "query", "balance"], 60_000);
+  assert(sessionInfo.address.startsWith("1"), `session key address: ${sessionInfo.address.slice(0, 10)}...`);
+  assert(sessionInfo.publicKey.length === 66, `session pubkey length: ${sessionInfo.publicKey.length}`);
+  assert(sessionInfo.permissions.length === 3, "3 permissions");
+  assert(sessionInfo.expiresAt > Date.now(), "expires in future");
+
+  // Check permissions
+  assert(sessionAgent.sessionHasPermission("read") === true, "has 'read' permission");
+  assert(sessionAgent.sessionHasPermission("write") === false, "no 'write' permission");
+  assert(sessionAgent.sessionHasPermission("query") === true, "has 'query' permission");
+
+  // Wildcard permission
+  const wildcardAgent = new RadiantAgent();
+  wildcardAgent.createWallet();
+  wildcardAgent.createSessionKey(["*"], 60_000);
+  assert(wildcardAgent.sessionHasPermission("anything") === true, "wildcard grants all permissions");
+
+  // Revoke
+  sessionAgent.revokeSessionKey();
+  assert(sessionAgent.getSessionKey() === null, "session key revoked");
+  assert(sessionAgent.sessionHasPermission("read") === false, "no permission after revoke");
+
+  // ─── Test 18: Session Key Expiry ───
+  console.log("\nTest 18: Session key expiry");
+  const expiryAgent = new RadiantAgent();
+  expiryAgent.createWallet();
+  expiryAgent.createSessionKey(["read"], 1); // 1ms TTL
+  await new Promise(r => setTimeout(r, 10)); // Wait for expiry
+  assert(expiryAgent.getSessionKey() === null, "session key expired after 1ms");
+
+  // ─── Test 19: Batch Operations (Live) ───
+  console.log("\nTest 19: Batch operations (live)");
+  try {
+    const batchAgent = new RadiantAgent();
+    batchAgent.createWallet();
+    await batchAgent.connect();
+
+    const balances = await batchAgent.getBalances([
+      "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      batchAgent.getAddress(),
+    ]);
+    assert(balances.length === 2, `batch returned ${balances.length} results`);
+    assert(balances[0].confirmed.photons > 0, `genesis balance > 0`);
+
+    // Audit log should have the batch entry
+    const batchLog = batchAgent.getAuditLog({ action: "batch_get_balances" });
+    assert(batchLog.length === 1, "batch operation was audited");
+    assert(batchLog[0].durationMs !== undefined, `batch took ${batchLog[0].durationMs}ms`);
+
+    await batchAgent.disconnect();
+  } catch (err) {
+    console.error("  Batch test error:", err);
+    failed++;
+  }
+
+  // ─── Test 20: Health Check (Live) ───
+  console.log("\nTest 20: Health check (live)");
+  try {
+    const healthAgent = new RadiantAgent();
+    healthAgent.createWallet();
+    await healthAgent.connect();
+
+    const health = await healthAgent.getHealthStatus();
+    assert(health.connected === true, `connected = ${health.connected}`);
+    assert(health.latencyMs >= 0, `latency = ${health.latencyMs}ms`);
+    assert(health.network === "mainnet", `network = ${health.network}`);
+
+    const pingMs = await healthAgent.ping();
+    assert(pingMs >= 0, `ping = ${pingMs}ms`);
+
+    await healthAgent.disconnect();
+  } catch (err) {
+    console.error("  Health test error:", err);
+    failed++;
+  }
+
   // Summary
   console.log(`\n${"=".repeat(40)}`);
   console.log(`Agent SDK Test Results: ${passed} passed, ${failed} failed`);

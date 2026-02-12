@@ -169,7 +169,7 @@ async function main() {
   console.log(`Tools: ${toolNames.length}`);
   console.log(`Resources: ${resourceNames.length}`);
 
-  const pass = toolNames.length >= 25 && resourceNames.length >= 4;
+  const pass = toolNames.length >= 42 && resourceNames.length >= 9;
   console.log(`\nResult: ${pass ? "✅ PASS" : "❌ FAIL"}`);
 
   if (stderr) {

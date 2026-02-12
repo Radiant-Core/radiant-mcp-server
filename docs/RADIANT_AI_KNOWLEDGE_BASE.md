@@ -1,7 +1,7 @@
 # Radiant Blockchain — AI Knowledge Base
 
 > Structured reference for AI systems. Load this document to understand the full Radiant ecosystem.
-> Version: 1.0 | Radiant Core: 2.1.0 | Feb 2026
+> Version: 1.1 | Radiant Core: 2.1.0 | Feb 2026 | Phase 5 AI Primitives
 
 ---
 
@@ -506,7 +506,102 @@ radiantd -nodeprofile=mining    # Mining optimized
 
 ---
 
-## 11. Common Patterns
+## 11. On-Chain AI Primitives (Phase 5)
+
+Five contract patterns enable AI agent workflows on Radiant. Each has a corresponding MCP tool and REST endpoint.
+
+### 11.1 Inference Proofs (InferenceProof.rxd)
+
+Record verifiable AI inference results on-chain using OP_BLAKE3.
+
+```
+commitment = blake3(modelHash || inputHash || output)
+```
+
+- **MCP tools:** `radiant_create_inference_proof`, `radiant_verify_inference_proof`
+- **REST:** `POST /api/inference/proof`, `POST /api/inference/verify`
+- **Use case:** Prove an AI model produced a specific output for a given input
+
+### 11.2 Agent Identity (AgentIdentity.rxd)
+
+Register AI agents on-chain with WAVE naming system integration.
+
+| Zone Record | Key | Example |
+|-------------|-----|---------|
+| Address | `address` | `1Agent...` |
+| API URL | `url` | `https://api.myagent.com/v1` |
+| Capabilities | `x-capabilities` | `research,translate,code` |
+| Pricing | `x-pricing` | `100sat/query` |
+| Model | `x-model` | `gpt-4-turbo` |
+
+- **MCP tools:** `radiant_build_agent_profile`, `radiant_resolve_agent_identity`
+- **REST:** `POST /api/identity/profile`, `GET /api/identity/resolve/:name`
+
+### 11.3 Token-Gated Access (TokenGatedService.rxd)
+
+Gate API access based on Glyph FT balance. The contract verifies the caller holds ≥ N tokens.
+
+- **MCP tool:** `radiant_check_token_access`
+- **REST:** `GET /api/access/check/:address/:tokenRef?min_balance=N`
+
+### 11.4 Micropayment Channels (MicropaymentChannel.rxd)
+
+Off-chain payment channels between two agents. State updates are signed off-chain; either party can close on-chain.
+
+```
+stateCommitment = blake3(balanceA || balanceB || nonce)
+```
+
+- **MCP tools:** `radiant_open_channel`, `radiant_update_channel`
+- **REST:** `POST /api/channel/open`, `POST /api/channel/update`
+- **Default timeout:** 1008 blocks (~3.5 days)
+
+### 11.5 Data Marketplace (DataMarketplace.rxd)
+
+Trade data assets (datasets, models, collections) as Glyph NFTs with provenance tracking.
+
+| Metadata Field | Key | Description |
+|---------------|-----|-------------|
+| Type | `x-type` | dataset, model, collection, computation |
+| Content Hash | `x-content-hash` | Blake3 hash for integrity verification |
+| Price | `x-price` | Price in photons (0 = free) |
+| Provenance | `x-derived-from` | Parent dataset references |
+| License | `x-license` | License terms (e.g., CC-BY-4.0) |
+
+- **MCP tools:** `radiant_build_data_asset`, `radiant_search_data_assets`
+- **REST:** `POST /api/marketplace/asset`, `GET /api/marketplace/search?q=...`
+
+### Agent SDK (src/agent.ts)
+
+The `RadiantAgent` class provides a high-level SDK for AI agent workflows:
+
+```javascript
+import { RadiantAgent } from '@radiant-core/mcp-server/agent';
+
+const agent = new RadiantAgent({
+  spendLimitPerTx: 100_00000000,    // 100 RXD max per tx
+  spendLimitPerHour: 1000_00000000, // 1000 RXD/hr
+});
+
+agent.createWallet();
+await agent.connect();
+
+// Batch operations
+const balances = await agent.getBalances(['1addr1...', '1addr2...']);
+
+// Session keys (temporary, permission-limited)
+const session = agent.createSessionKey(['read', 'query'], 3600_000);
+
+// Audit logging
+const log = agent.getAuditLog({ action: 'batch_get_balances', limit: 10 });
+
+// Health check
+const health = await agent.getHealthStatus();
+```
+
+---
+
+## 12. Common Patterns
 
 ### Send RXD (JavaScript)
 
@@ -571,7 +666,7 @@ const record = await electrumx.request('wave.resolve', ['alice']);
 
 ---
 
-## 12. Fee Guidelines
+## 13. Fee Guidelines
 
 | Network Phase | Min Fee |
 |--------------|---------|
@@ -583,7 +678,7 @@ Typical transaction: ~226 bytes → ~0.001 RXD fee (pre-V2).
 
 ---
 
-## 13. Key Differences from Bitcoin
+## 14. Key Differences from Bitcoin
 
 | Feature | Bitcoin | Radiant |
 |---------|---------|---------|

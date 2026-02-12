@@ -76,7 +76,25 @@ export type AgentEventType =
   | "connected"
   | "disconnected"
   | "error"
-  | "spend-limit-warning";
+  | "spend-limit-warning"
+  | "audit";
+
+export interface AuditLogEntry {
+  timestamp: number;
+  action: string;
+  details: Record<string, unknown>;
+  success: boolean;
+  error?: string;
+  durationMs?: number;
+}
+
+export interface SessionKeyInfo {
+  address: string;
+  publicKey: string;
+  createdAt: number;
+  expiresAt: number;
+  permissions: string[];
+}
 
 // ────────────────────────────────────────────────────────────
 // Agent SDK
@@ -91,6 +109,9 @@ export class RadiantAgent extends EventEmitter {
   private readonly watchedAddresses = new Map<string, string>(); // address → scripthash
   private pollInterval: ReturnType<typeof setInterval> | null = null;
   private readonly lastKnownBalance = new Map<string, number>(); // scripthash → confirmed
+  private readonly auditLog: AuditLogEntry[] = [];
+  private readonly maxAuditEntries = 10_000;
+  private sessionKey: { wallet: AgentWallet; info: SessionKeyInfo } | null = null;
 
   constructor(config: AgentConfig = {}) {
     super();
@@ -484,6 +505,148 @@ export class RadiantAgent extends EventEmitter {
         this.emit("error", err);
       }
     }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  Audit Logging
+  // ══════════════════════════════════════════════════════════
+
+  /** Log an action to the audit trail. */
+  private audit(action: string, details: Record<string, unknown>, success: boolean, error?: string, durationMs?: number): void {
+    const entry: AuditLogEntry = { timestamp: Date.now(), action, details, success, error, durationMs };
+    this.auditLog.push(entry);
+    if (this.auditLog.length > this.maxAuditEntries) {
+      this.auditLog.splice(0, this.auditLog.length - this.maxAuditEntries);
+    }
+    this.emit("audit", entry);
+  }
+
+  /** Get audit log entries, optionally filtered by action or time range. */
+  getAuditLog(opts?: { action?: string; sinceMs?: number; limit?: number }): AuditLogEntry[] {
+    let entries = this.auditLog;
+    if (opts?.action) entries = entries.filter((e) => e.action === opts.action);
+    if (opts?.sinceMs) entries = entries.filter((e) => e.timestamp > opts.sinceMs!);
+    if (opts?.limit) entries = entries.slice(-opts.limit);
+    return entries;
+  }
+
+  /** Clear audit log. */
+  clearAuditLog(): void {
+    this.auditLog.length = 0;
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  Session Keys
+  // ══════════════════════════════════════════════════════════
+
+  /** Create a temporary session key with limited permissions and expiry. */
+  createSessionKey(permissions: string[], ttlMs = 3600_000): SessionKeyInfo {
+    const sessionWallet = AgentWallet.create(this.config.network);
+    const info: SessionKeyInfo = {
+      address: sessionWallet.address,
+      publicKey: sessionWallet.getPublicKeyHex(),
+      createdAt: Date.now(),
+      expiresAt: Date.now() + ttlMs,
+      permissions,
+    };
+    this.sessionKey = { wallet: sessionWallet, info };
+    this.audit("session_key_created", { address: info.address, permissions, ttlMs }, true);
+    return info;
+  }
+
+  /** Get current session key info, or null if expired/not created. */
+  getSessionKey(): SessionKeyInfo | null {
+    if (!this.sessionKey) return null;
+    if (Date.now() > this.sessionKey.info.expiresAt) {
+      this.audit("session_key_expired", { address: this.sessionKey.info.address }, true);
+      this.sessionKey = null;
+      return null;
+    }
+    return this.sessionKey.info;
+  }
+
+  /** Check if a session key has a specific permission. */
+  sessionHasPermission(permission: string): boolean {
+    const key = this.getSessionKey();
+    if (!key) return false;
+    return key.permissions.includes(permission) || key.permissions.includes("*");
+  }
+
+  /** Revoke the current session key. */
+  revokeSessionKey(): void {
+    if (this.sessionKey) {
+      this.audit("session_key_revoked", { address: this.sessionKey.info.address }, true);
+      this.sessionKey = null;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  Batch Operations
+  // ══════════════════════════════════════════════════════════
+
+  /** Get balances for multiple addresses in parallel. */
+  async getBalances(addresses: string[]): Promise<BalanceResult[]> {
+    const start = Date.now();
+    await this.ensureConnected();
+    const results = await Promise.all(
+      addresses.map(async (addr) => {
+        try {
+          return await this.getBalance(addr);
+        } catch (err) {
+          return {
+            address: addr,
+            confirmed: { photons: 0, rxd: "0.00000000" },
+            unconfirmed: { photons: 0, rxd: "0.00000000" },
+            total: { photons: 0, rxd: "0.00000000" },
+          } as BalanceResult;
+        }
+      }),
+    );
+    this.audit("batch_get_balances", { count: addresses.length }, true, undefined, Date.now() - start);
+    return results;
+  }
+
+  /** Get UTXOs for multiple addresses in parallel. */
+  async getMultipleUTXOs(addresses: string[]): Promise<Map<string, UTXOResult[]>> {
+    const start = Date.now();
+    await this.ensureConnected();
+    const result = new Map<string, UTXOResult[]>();
+    await Promise.all(
+      addresses.map(async (addr) => {
+        try {
+          const utxos = await this.getUTXOs(addr);
+          result.set(addr, utxos);
+        } catch {
+          result.set(addr, []);
+        }
+      }),
+    );
+    this.audit("batch_get_utxos", { count: addresses.length }, true, undefined, Date.now() - start);
+    return result;
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  Connection Health
+  // ══════════════════════════════════════════════════════════
+
+  /** Check ElectrumX connection health. Returns latency in ms, or -1 if unreachable. */
+  async ping(): Promise<number> {
+    try {
+      await this.ensureConnected();
+      return await this.electrumx.ping();
+    } catch {
+      return -1;
+    }
+  }
+
+  /** Get connection health status. */
+  async getHealthStatus(): Promise<{ connected: boolean; latencyMs: number; network: string }> {
+    const latency = await this.ping();
+    return {
+      connected: this.connected && latency >= 0,
+      latencyMs: latency,
+      network: this.config.network,
+    };
   }
 
   // ══════════════════════════════════════════════════════════

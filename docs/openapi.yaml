@@ -9,7 +9,7 @@ info:
 
     All endpoints return JSON. Amounts are in photons (1 RXD = 100,000,000 photons)
     unless otherwise noted.
-  version: 1.0.0
+  version: 1.1.0
   contact:
     name: Radiant Core
     url: https://github.com/Radiant-Core
@@ -35,6 +35,18 @@ tags:
     description: On-chain DEX orderbook
   - name: Utility
     description: Address validation, protocol info
+  - name: Inference
+    description: AI inference proof commitments (Phase 5)
+  - name: Identity
+    description: AI agent identity via WAVE (Phase 5)
+  - name: Access
+    description: Token-gated service access (Phase 5)
+  - name: Channel
+    description: Micropayment channels (Phase 5)
+  - name: Marketplace
+    description: Data asset marketplace (Phase 5)
+  - name: Health
+    description: Connection health monitoring
 
 paths:
   /chain:
@@ -554,3 +566,308 @@ paths:
           content:
             application/json:
               schema: { type: object }
+
+  # ── Phase 5: AI Primitives ──
+
+  /inference/proof:
+    post:
+      operationId: createInferenceProof
+      summary: Create a blake3 inference proof commitment
+      tags: [Inference]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model_hash, input_hash, output_hex]
+              properties:
+                model_hash: { type: string, minLength: 64, maxLength: 64, description: Blake3 hash of model weights }
+                input_hash: { type: string, minLength: 64, maxLength: 64, description: Blake3 hash of input data }
+                output_hex: { type: string, description: Inference output as hex }
+      responses:
+        "200":
+          description: Inference proof commitment
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  modelHash: { type: string }
+                  inputHash: { type: string }
+                  commitment: { type: string }
+                  timestamp: { type: integer }
+
+  /inference/verify:
+    post:
+      operationId: verifyInferenceProof
+      summary: Verify an inference proof commitment
+      tags: [Inference]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model_hash, input_hash, output_hex, commitment]
+              properties:
+                model_hash: { type: string }
+                input_hash: { type: string }
+                output_hex: { type: string }
+                commitment: { type: string, minLength: 64, maxLength: 64 }
+      responses:
+        "200":
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid: { type: boolean }
+                  commitment: { type: string }
+                  message: { type: string }
+
+  /identity/profile:
+    post:
+      operationId: buildAgentProfile
+      summary: Build an AI agent identity profile
+      tags: [Identity]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address, description, capabilities]
+              properties:
+                address: { type: string, description: Agent Radiant address }
+                description: { type: string }
+                capabilities: { type: array, items: { type: string } }
+                api_url: { type: string }
+                pricing: { type: string }
+                model: { type: string }
+                wave_name: { type: string }
+      responses:
+        "200":
+          description: Agent profile with WAVE records
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profile: { type: object }
+                  waveRecords: { type: object }
+
+  /identity/resolve/{name}:
+    get:
+      operationId: resolveAgentIdentity
+      summary: Resolve an AI agent identity from WAVE name
+      tags: [Identity]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+          description: Agent WAVE name
+      responses:
+        "200":
+          description: Agent identity
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  wave_name: { type: string }
+                  found: { type: boolean }
+                  agent: { type: object, nullable: true }
+                  rawZone: { type: object, nullable: true }
+
+  /access/check/{address}/{tokenRef}:
+    get:
+      operationId: checkTokenAccess
+      summary: Check token-gated service access
+      tags: [Access]
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+          description: Address to check
+        - name: tokenRef
+          in: path
+          required: true
+          schema: { type: string }
+          description: Service token reference
+        - name: min_balance
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+          description: Minimum token balance required
+      responses:
+        "200":
+          description: Access check result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  address: { type: string }
+                  tokenRef: { type: string }
+                  hasAccess: { type: boolean }
+                  balance: { type: integer }
+                  required: { type: integer }
+
+  /channel/open:
+    post:
+      operationId: openChannel
+      summary: Create initial micropayment channel state
+      tags: [Channel]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channel_id, agent_a, agent_b, capacity]
+              properties:
+                channel_id: { type: string, description: Channel ID (funding txid) }
+                agent_a: { type: string, description: Payer pubkey hex (66 chars) }
+                agent_b: { type: string, description: Payee pubkey hex (66 chars) }
+                capacity: { type: integer, minimum: 1, description: Locked amount in photons }
+                timeout_blocks: { type: integer, default: 1008, description: Timeout in blocks }
+      responses:
+        "200":
+          description: Channel initial state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  channelId: { type: string }
+                  agentA: { type: string }
+                  agentB: { type: string }
+                  capacity: { type: integer }
+                  balanceA: { type: integer }
+                  balanceB: { type: integer }
+                  nonce: { type: integer }
+                  stateCommitment: { type: string }
+                  summary: { type: string }
+
+  /channel/update:
+    post:
+      operationId: updateChannel
+      summary: Update micropayment channel state
+      tags: [Channel]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channel_id, agent_a, agent_b, capacity, balance_a, balance_b, payment_amount]
+              properties:
+                channel_id: { type: string }
+                agent_a: { type: string }
+                agent_b: { type: string }
+                capacity: { type: integer }
+                balance_a: { type: integer }
+                balance_b: { type: integer }
+                nonce: { type: integer, default: 0 }
+                timeout_blocks: { type: integer, default: 1008 }
+                payment_amount: { type: integer, minimum: 1, description: Amount to transfer A→B }
+      responses:
+        "200":
+          description: Updated channel state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  channelId: { type: string }
+                  balanceA: { type: integer }
+                  balanceB: { type: integer }
+                  nonce: { type: integer }
+                  stateCommitment: { type: string }
+                  summary: { type: string }
+
+  /marketplace/asset:
+    post:
+      operationId: buildDataAsset
+      summary: Build Glyph NFT metadata for a data marketplace asset
+      tags: [Marketplace]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ref, type, name, content_hash]
+              properties:
+                ref: { type: string, description: NFT reference }
+                type: { type: string, enum: [dataset, model, collection, computation] }
+                name: { type: string }
+                description: { type: string }
+                content_hash: { type: string, minLength: 64, maxLength: 64 }
+                size_bytes: { type: integer }
+                mime_type: { type: string }
+                price: { type: integer, default: 0, description: Price in photons }
+                derived_from: { type: array, items: { type: string }, description: Parent dataset refs }
+                license: { type: string }
+      responses:
+        "200":
+          description: CBOR-ready metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  metadata: { type: object }
+                  provenanceCommitment: { type: string, nullable: true }
+
+  /marketplace/search:
+    get:
+      operationId: searchDataAssets
+      summary: Search the data marketplace
+      tags: [Marketplace]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+          description: Search query
+        - name: type
+          in: query
+          schema: { type: string, enum: [dataset, model, collection, computation] }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  query: { type: string }
+                  type: { type: string, nullable: true }
+                  results: { type: array, items: { type: object } }
+
+  /health:
+    get:
+      operationId: getHealth
+      summary: Check ElectrumX connection health
+      tags: [Health]
+      responses:
+        "200":
+          description: Health status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [healthy, degraded, unhealthy] }
+                  electrumx: { type: object, properties: { connected: { type: boolean }, latencyMs: { type: integer } } }
+                  network: { type: string }
+                  timestamp: { type: integer }
+        "503":
+          description: Unhealthy
