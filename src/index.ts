@@ -798,6 +798,32 @@ For P2PKH address starting with '1':
   }),
 );
 
+server.resource(
+  "knowledge-base",
+  "radiant://docs/knowledge-base",
+  {
+    description: "Comprehensive Radiant blockchain AI knowledge base — opcodes, token protocols, APIs, SDK patterns, and network parameters in a single document",
+    mimeType: "text/markdown",
+  },
+  async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const url = await import("node:url");
+    const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
+    const kbPath = path.resolve(__dirname, "../docs/RADIANT_AI_KNOWLEDGE_BASE.md");
+    let text: string;
+    try {
+      text = fs.readFileSync(kbPath, "utf-8");
+    } catch {
+      // Fallback: inline summary if file not found (e.g., running from dist/)
+      text = getChainOverview() + "\n\n" + getOpcodeReference() + "\n\n" + getProtocolReference();
+    }
+    return {
+      contents: [{ uri: "radiant://docs/knowledge-base", text, mimeType: "text/markdown" }],
+    };
+  },
+);
+
 // ════════════════════════════════════════════════════════════
 //  START SERVER
 // ════════════════════════════════════════════════════════════

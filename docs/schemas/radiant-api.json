@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Radiant Blockchain API Reference",
+  "description": "Machine-readable reference for Radiant ElectrumX and Glyph APIs",
+  "version": "1.0.0",
+  "network": {
+    "mainnet": {
+      "ticker": "RXD",
+      "miningAlgorithm": "SHA512/256d",
+      "blockTime": 300,
+      "maxBlockSize": 256000000,
+      "maxTxSize": 12000000,
+      "maxSupply": 21000000000,
+      "decimals": 8,
+      "blockReward": 25000,
+      "halvingInterval": 210000,
+      "v2ActivationHeight": 410000,
+      "addressPrefix": { "p2pkh": 0, "p2sh": 5, "wif": 128 },
+      "ports": { "p2p": 7333, "rpc": 7332, "electrumxTcp": 50010, "electrumxSsl": 50012, "electrumxWss": 50011 }
+    },
+    "testnet": {
+      "ticker": "tRXD",
+      "addressPrefix": { "p2pkh": 111, "p2sh": 196, "wif": 239 },
+      "ports": { "p2p": 17333, "rpc": 17332, "electrumxTcp": 51010, "electrumxSsl": 51012 }
+    }
+  },
+  "electrumxServers": [
+    { "host": "electrumx.radiantexplorer.com", "tcp": 50010, "ssl": 50012, "wss": 50011 },
+    { "host": "electrumx.radiantblockchain.org", "tcp": 50010, "ssl": 50012, "wss": 50011 },
+    { "host": "electrumx.radiant4people.com", "tcp": 50010, "ssl": 50012, "wss": 50011 }
+  ],
+  "electrumxMethods": {
+    "blockchain": [
+      { "method": "server.version", "params": ["client_name", "protocol_version"], "returns": "[server_name, protocol]" },
+      { "method": "blockchain.scripthash.get_balance", "params": ["scripthash"], "returns": "{confirmed, unconfirmed}" },
+      { "method": "blockchain.scripthash.listunspent", "params": ["scripthash"], "returns": "[{tx_hash, tx_pos, value, height}]" },
+      { "method": "blockchain.scripthash.get_history", "params": ["scripthash"], "returns": "[{tx_hash, height}]" },
+      { "method": "blockchain.scripthash.subscribe", "params": ["scripthash"], "returns": "status_hash" },
+      { "method": "blockchain.transaction.get", "params": ["txid", "verbose?"], "returns": "tx_hex or tx_object" },
+      { "method": "blockchain.transaction.broadcast", "params": ["raw_tx_hex"], "returns": "txid" },
+      { "method": "blockchain.headers.subscribe", "params": [], "returns": "{height, hex}" },
+      { "method": "blockchain.block.header", "params": ["height"], "returns": "header_hex" },
+      { "method": "blockchain.estimatefee", "params": ["blocks"], "returns": "fee_per_kb" }
+    ],
+    "glyph": [
+      { "method": "glyph.get_token", "params": ["glyph_id"], "returns": "token_object" },
+      { "method": "glyph.get_token_info", "params": ["ref"], "returns": "{ref, name, ticker, protocols, supply, ...}" },
+      { "method": "glyph.get_balance", "params": ["scripthash", "ref"], "returns": "{confirmed, unconfirmed}" },
+      { "method": "glyph.list_tokens", "params": ["scripthash", "limit?"], "returns": "[{ref, name, balance}]" },
+      { "method": "glyph.get_history", "params": ["ref", "limit?", "offset?"], "returns": "[{tx_hash, height, type, amount}]" },
+      { "method": "glyph.search_tokens", "params": ["query", "protocols?", "limit?"], "returns": "matching_tokens" },
+      { "method": "glyph.get_tokens_by_type", "params": ["type_id", "limit?", "offset?"], "returns": "tokens" },
+      { "method": "glyph.get_metadata", "params": ["ref"], "returns": "parsed_cbor_metadata" },
+      { "method": "glyph.validate_protocols", "params": ["protocol_ids"], "returns": "{valid, token_type}" },
+      { "method": "glyph.get_protocol_info", "params": [], "returns": "protocol_definitions" },
+      { "method": "glyph.parse_envelope", "params": ["script_hex"], "returns": "parsed_envelope" }
+    ],
+    "dmint": [
+      { "method": "dmint.get_contracts", "params": ["format?"], "returns": "contracts_list" },
+      { "method": "dmint.get_contract", "params": ["ref"], "returns": "{ref, difficulty, reward, algorithm, ...}" },
+      { "method": "dmint.get_by_algorithm", "params": ["algorithm_id"], "returns": "contracts" },
+      { "method": "dmint.get_most_profitable", "params": ["limit?"], "returns": "sorted_contracts" }
+    ],
+    "wave": [
+      { "method": "wave.resolve", "params": ["name"], "returns": "{ref, zone, owner} or null" },
+      { "method": "wave.check_available", "params": ["name"], "returns": "{available, ref?}" },
+      { "method": "wave.get_subdomains", "params": ["parent_name", "limit?", "offset?"], "returns": "child_names" },
+      { "method": "wave.reverse_lookup", "params": ["scripthash", "limit?"], "returns": "names" },
+      { "method": "wave.stats", "params": [], "returns": "{enabled, tree_cache_size, ...}" }
+    ],
+    "swap": [
+      { "method": "swap.get_orders", "params": ["sell_ref", "buy_ref", "limit?", "offset?"], "returns": "orders" },
+      { "method": "swap.get_history", "params": ["ref", "limit?", "offset?"], "returns": "trade_history" }
+    ]
+  },
+  "glyphProtocols": {
+    "1": { "name": "GLYPH_FT", "description": "Fungible Token", "refOpcode": "OP_PUSHINPUTREF" },
+    "2": { "name": "GLYPH_NFT", "description": "Non-Fungible Token", "refOpcode": "OP_PUSHINPUTREFSINGLETON" },
+    "3": { "name": "GLYPH_DAT", "description": "Data Attachment" },
+    "4": { "name": "GLYPH_DMINT", "description": "Decentralized Minting" },
+    "5": { "name": "GLYPH_MUT", "description": "Mutable State" },
+    "6": { "name": "GLYPH_BURN", "description": "Explicit Burn" },
+    "7": { "name": "GLYPH_CONTAINER", "description": "Container/Collection" },
+    "8": { "name": "GLYPH_ENCRYPTED", "description": "Encrypted Content" },
+    "9": { "name": "GLYPH_TIMELOCK", "description": "Timelocked Reveal" },
+    "10": { "name": "GLYPH_AUTHORITY", "description": "Issuer Authority" },
+    "11": { "name": "GLYPH_WAVE", "description": "WAVE Naming System" }
+  },
+  "dmintAlgorithms": {
+    "0": { "name": "SHA256D", "opcode": "OP_HASH256", "hex": "0xaa" },
+    "1": { "name": "BLAKE3", "opcode": "OP_BLAKE3", "hex": "0xee" },
+    "2": { "name": "K12", "opcode": "OP_K12", "hex": "0xef" }
+  },
+  "opcodes": {
+    "introspection": {
+      "OP_INPUTINDEX": "0xC0", "OP_ACTIVEBYTECODE": "0xC1", "OP_TXVERSION": "0xC2",
+      "OP_TXINPUTCOUNT": "0xC3", "OP_TXOUTPUTCOUNT": "0xC4", "OP_TXLOCKTIME": "0xC5",
+      "OP_UTXOVALUE": "0xC6", "OP_UTXOBYTECODE": "0xC7", "OP_OUTPOINTTXHASH": "0xC8",
+      "OP_OUTPOINTINDEX": "0xC9", "OP_INPUTBYTECODE": "0xCA", "OP_INPUTSEQUENCENUMBER": "0xCB",
+      "OP_OUTPUTVALUE": "0xCC", "OP_OUTPUTBYTECODE": "0xCD"
+    },
+    "references": {
+      "OP_PUSHINPUTREF": "0xD0", "OP_REQUIREINPUTREF": "0xD1",
+      "OP_DISALLOWPUSHINPUTREF": "0xD2", "OP_DISALLOWPUSHINPUTREFSIBLING": "0xD3",
+      "OP_REFVALUESUM_UTXOS": "0xD4", "OP_REFVALUESUM_OUTPUTS": "0xD5",
+      "OP_REFOUTPUTCOUNT_UTXOS": "0xD6", "OP_REFOUTPUTCOUNT_OUTPUTS": "0xD7",
+      "OP_PUSHINPUTREFSINGLETON": "0xD8",
+      "OP_CODESCRIPTHASHVALUESUM_UTXOS": "0xE0", "OP_CODESCRIPTHASHVALUESUM_OUTPUTS": "0xE1",
+      "OP_CODESCRIPTHASHOUTPUTCOUNT_UTXOS": "0xE2", "OP_CODESCRIPTHASHOUTPUTCOUNT_OUTPUTS": "0xE3",
+      "OP_PUSH_TX_STATE": "0xED"
+    },
+    "state": {
+      "OP_STATESEPARATOR": "0xBD",
+      "OP_STATESEPARATORINDEX_UTXO": "0xBE",
+      "OP_STATESEPARATORINDEX_OUTPUT": "0xBF"
+    },
+    "v2": {
+      "OP_BLAKE3": "0xEE", "OP_K12": "0xEF",
+      "OP_LSHIFT": "0x98", "OP_RSHIFT": "0x99",
+      "OP_2MUL": "0x8D", "OP_2DIV": "0x8E"
+    }
+  },
+  "validProtocolCombinations": [
+    [1], [2], [3], [1, 4], [2, 5], [2, 7], [2, 8], [1, 4, 5], [2, 5, 7]
+  ]
+}
