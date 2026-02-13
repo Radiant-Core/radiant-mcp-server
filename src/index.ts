@@ -1153,6 +1153,27 @@ server.tool(
 );
 
 // ════════════════════════════════════════════════════════════
+//  TOOLS — Script Decode (offline)
+// ════════════════════════════════════════════════════════════
+
+server.tool(
+  "radiant_decode_script",
+  "Decode raw script hex into human-readable opcodes. Works offline — no ElectrumX connection required. Useful for debugging transactions and smart contracts.",
+  {
+    script_hex: z.string().describe("Script in hexadecimal (e.g., '76a91489abcdef...88ac')"),
+  },
+  async ({ script_hex }) => {
+    try {
+      const { decodeScript } = await import("./script-decode.js");
+      const decoded = decodeScript(script_hex);
+      return { content: [jsonText(decoded)] };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  },
+);
+
+// ════════════════════════════════════════════════════════════
 //  RESOURCES — Static reference data
 // ════════════════════════════════════════════════════════════
 
@@ -1383,6 +1404,39 @@ server.resource(
       };
     } catch {
       return { contents: [{ uri: "radiant://network/fees", text: JSON.stringify({ error: "unavailable" }), mimeType: "application/json" }] };
+    }
+  },
+);
+
+server.resource(
+  "tokens-popular",
+  "radiant://tokens/popular",
+  {
+    description: "Popular Glyph tokens: well-known fungible tokens and NFT collections on the Radiant network",
+    mimeType: "application/json",
+  },
+  async () => {
+    try {
+      await ensureConnected();
+      // Fetch FT (type 1) and NFT (type 2) tokens, take the top entries
+      const [ftTokens, nftTokens] = await Promise.all([
+        electrumx.glyphGetTokensByType(1, 20, 0),
+        electrumx.glyphGetTokensByType(2, 20, 0),
+      ]);
+      return {
+        contents: [{
+          uri: "radiant://tokens/popular",
+          text: JSON.stringify({
+            fungible_tokens: ftTokens,
+            nft_collections: nftTokens,
+            note: "Top fungible tokens (FT) and NFT collections by on-chain activity",
+            timestamp: Date.now(),
+          }, null, 2),
+          mimeType: "application/json",
+        }],
+      };
+    } catch {
+      return { contents: [{ uri: "radiant://tokens/popular", text: JSON.stringify({ error: "unavailable" }), mimeType: "application/json" }] };
     }
   },
 );

@@ -1,19 +1,36 @@
 {
   "name": "@radiant-core/mcp-server",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Model Context Protocol (MCP) server for the Radiant blockchain — enables AI agents to query, transact, and manage Glyph tokens",
   "type": "module",
   "main": "dist/index.js",
+  "files": [
+    "dist/",
+    "docs/",
+    "README.md",
+    "LICENSE"
+  ],
   "bin": {
     "radiant-mcp-server": "dist/index.js",
-    "radiant-rest-api": "dist/rest.js"
+    "radiant-rest-api": "dist/rest.js",
+    "radiant-mcp-sse": "dist/sse.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AustinLitworWorking/radiant-mcp-server.git"
+  },
+  "homepage": "https://github.com/AustinLitworWorking/radiant-mcp-server#readme",
+  "bugs": {
+    "url": "https://github.com/AustinLitworWorking/radiant-mcp-server/issues"
   },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "start:rest": "node dist/rest.js",
+    "start:sse": "node dist/sse.js",
     "dev": "tsx src/index.ts",
     "dev:rest": "tsx src/rest.ts",
+    "dev:sse": "tsx src/sse.ts",
     "test": "vitest run",
     "lint": "tsc --noEmit"
   },

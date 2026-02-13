@@ -657,6 +657,79 @@ route("GET", "/health", async (_p, _q, _req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════
+//  ROUTES — Script Decode (offline)
+// ════════════════════════════════════════════════════════════
+
+route("POST", "/script/decode", async (_p, _q, req, res) => {
+  const body = JSON.parse(await readBody(req));
+  if (!body.script_hex) return error(res, "Missing script_hex");
+  const { decodeScript } = await import("./script-decode.js");
+  const decoded = decodeScript(body.script_hex);
+  json(res, decoded);
+});
+
+route("GET", "/tokens/popular", async (_p, q, _req, res) => {
+  const limit = parseInt(q.limit || "20", 10);
+  await ensureConnected();
+  const [ftTokens, nftTokens] = await Promise.all([
+    electrumx.glyphGetTokensByType(1, limit, 0),
+    electrumx.glyphGetTokensByType(2, limit, 0),
+  ]);
+  json(res, { fungible_tokens: ftTokens, nft_collections: nftTokens, timestamp: Date.now() });
+});
+
+// ════════════════════════════════════════════════════════════
+//  ROUTES — Swagger UI
+// ════════════════════════════════════════════════════════════
+
+route("GET", "/docs/swagger", async (_p, _q, _req, res) => {
+  const specUrl = "/api/docs/openapi.json";
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Radiant REST API — Swagger UI</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+  <style>body{margin:0} .topbar{display:none}</style>
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>SwaggerUIBundle({url:"${specUrl}",dom_id:"#swagger-ui",deepLinking:true,presets:[SwaggerUIBundle.presets.apis,SwaggerUIBundle.SwaggerUIStandalonePreset],layout:"BaseLayout"})</script>
+</body>
+</html>`;
+  res.writeHead(200, { "Content-Type": "text/html", "Access-Control-Allow-Origin": CORS_ORIGIN });
+  res.end(html);
+});
+
+route("GET", "/docs/openapi.json", async (_p, _q, _req, res) => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const url = await import("node:url");
+  const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
+  const specPath = path.resolve(__dirname, "../docs/schemas/radiant-api.json");
+  try {
+    const spec = fs.readFileSync(specPath, "utf-8");
+    res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": CORS_ORIGIN });
+    res.end(spec);
+  } catch {
+    // Generate minimal spec from registered routes
+    const spec = {
+      openapi: "3.1.0",
+      info: { title: "Radiant REST API", version: "1.1.0", description: "REST API for the Radiant blockchain" },
+      servers: [{ url: `http://localhost:${PORT}/api` }],
+      paths: Object.fromEntries(
+        routes.map((r) => [
+          r.pattern.source.replace(/\(\[\^\/\]\+\)/g, "{param}").replace(/[\\^$]/g, ""),
+          { [r.method.toLowerCase()]: { summary: r.pattern.source, responses: { "200": { description: "OK" } } } },
+        ]),
+      ),
+    };
+    json(res, spec);
+  }
+});
+
+// ════════════════════════════════════════════════════════════
 //  SERVER
 // ════════════════════════════════════════════════════════════
 
