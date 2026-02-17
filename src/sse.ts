@@ -34,7 +34,7 @@ async function startSSE(): Promise<void> {
 
   const server = new McpServer({
     name: "radiant-mcp-server",
-    version: "1.3.0",
+    version: "1.4.0",
   });
 
   // Register a health-check tool so clients can verify the SSE connection works

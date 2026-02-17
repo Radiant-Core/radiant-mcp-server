@@ -1,6 +1,6 @@
 {
   "name": "@radiant-core/mcp-server",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Model Context Protocol (MCP) server for the Radiant blockchain — enables AI agents to query, transact, and manage Glyph tokens",
   "type": "module",
   "main": "dist/index.js",
