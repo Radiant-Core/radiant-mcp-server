@@ -773,6 +773,129 @@ route("POST", "/token/transfer", async (_p, _q, req, res) => {
   json(res, result);
 });
 
+// ════════════════════════════════════════════════════════════
+//  ROUTES — Agent Enhancements (v1.4.0)
+// ════════════════════════════════════════════════════════════
+
+route("GET", "/address/:address/token-utxos", async (p, _q, _req, res) => {
+  if (!isValidAddress(p.address)) return error(res, "Invalid address");
+  await ensureConnected();
+  const { getTokenUtxos } = await import("./tx-builder.js");
+  const result = await getTokenUtxos(electrumx, p.address);
+  json(res, {
+    address: result.address,
+    tokenCount: result.tokens.length,
+    tokens: result.tokens,
+    rxdUtxoCount: result.allUtxos.length,
+    totalRxdSatoshis: result.allUtxos.reduce((s: number, u: { value: number }) => s + u.value, 0),
+  });
+});
+
+route("POST", "/tx/build", async (_p, _q, req, res) => {
+  const body = JSON.parse(await readBody(req));
+  if (!body.wif) return error(res, "Missing wif");
+  if (!Array.isArray(body.outputs) || !body.outputs.length) return error(res, "Missing outputs array");
+  const { AgentWallet } = await import("./wallet.js");
+  const { buildTransaction } = await import("./tx-builder.js");
+  const wallet = AgentWallet.fromWIF(body.wif);
+  await ensureConnected();
+  const result = await buildTransaction(electrumx, wallet.address, {
+    wif: body.wif,
+    outputs: body.outputs,
+    changeAddress: body.change_address,
+    feePerByte: body.fee_per_byte ?? 1,
+    dryRun: body.dry_run !== false,
+  });
+  json(res, result);
+});
+
+route("GET", "/tx/estimate-fee", async (_p, q, _req, res) => {
+  const inputCount = parseInt(q.inputs || "1", 10);
+  const outputCount = parseInt(q.outputs || "2", 10);
+  const feePerByte = parseInt(q.fee_per_byte || "1", 10);
+  const opReturnSizes = q.op_return_sizes
+    ? q.op_return_sizes.split(",").map(Number)
+    : undefined;
+  const { estimateTxFee } = await import("./tx-builder.js");
+  const result = estimateTxFee({ inputCount, outputCount, opReturnSizes, feePerByte });
+  json(res, result);
+});
+
+route("POST", "/tx/send-batch", async (_p, _q, req, res) => {
+  const body = JSON.parse(await readBody(req));
+  if (!body.wif) return error(res, "Missing wif");
+  if (!Array.isArray(body.outputs) || !body.outputs.length) return error(res, "Missing outputs array");
+  const { AgentWallet } = await import("./wallet.js");
+  const { sendBatch } = await import("./tx-builder.js");
+  const wallet = AgentWallet.fromWIF(body.wif);
+  await ensureConnected();
+  const result = await sendBatch(electrumx, wallet.address, {
+    wif: body.wif,
+    outputs: body.outputs,
+    changeAddress: body.change_address,
+    feePerByte: body.fee_per_byte ?? 1,
+  });
+  json(res, { ...result, recipientCount: body.outputs.length, totalSent: body.outputs.reduce((s: number, o: { satoshis: number }) => s + o.satoshis, 0) });
+});
+
+route("POST", "/address/:address/watch", async (p, _q, _req, res) => {
+  if (!isValidAddress(p.address)) return error(res, "Invalid address");
+  await ensureConnected();
+  const sh = addressToScripthash(p.address);
+  const statusHash = await electrumx.subscribeScripthash(sh);
+  const balance = await electrumx.getBalance(sh);
+  const utxos = await electrumx.listUnspent(sh);
+  json(res, {
+    address: p.address,
+    scripthash: sh,
+    statusHash,
+    currentBalance: {
+      confirmed: { satoshis: balance.confirmed, rxd: satoshisToRxd(balance.confirmed) },
+      unconfirmed: { satoshis: balance.unconfirmed, rxd: satoshisToRxd(balance.unconfirmed) },
+    },
+    utxoCount: (utxos as unknown[]).length,
+    subscribed: true,
+  });
+});
+
+route("POST", "/wallet/derive", async (_p, _q, req, res) => {
+  const body = JSON.parse(await readBody(req));
+  if (!body.mnemonic) return error(res, "Missing mnemonic");
+  const { AgentWallet } = await import("./wallet.js");
+  const wallet = AgentWallet.fromMnemonic(
+    body.mnemonic,
+    body.network || "mainnet",
+    body.passphrase || "",
+    body.path || "m/44'/0'/0'/0/0",
+  );
+  json(res, {
+    address: wallet.address,
+    publicKey: wallet.getPublicKeyHex(),
+    wif: wallet.getWIF(),
+    derivationPath: body.path || "m/44'/0'/0'/0/0",
+    network: body.network || "mainnet",
+  });
+});
+
+route("POST", "/token/burn", async (_p, _q, req, res) => {
+  const body = JSON.parse(await readBody(req));
+  if (!body.wif) return error(res, "Missing wif");
+  if (!body.token_ref) return error(res, "Missing token_ref (txid_vout format)");
+  if (!body.amount || typeof body.amount !== "number") return error(res, "Missing amount (number)");
+  const { AgentWallet } = await import("./wallet.js");
+  const { burnToken } = await import("./tx-builder.js");
+  const wallet = AgentWallet.fromWIF(body.wif);
+  await ensureConnected();
+  const result = await burnToken(electrumx, wallet.address, {
+    wif: body.wif,
+    tokenRef: body.token_ref,
+    amount: body.amount,
+    changeAddress: body.change_address,
+    feePerByte: body.fee_per_byte ?? 1,
+  });
+  json(res, { ...result, tokenRef: body.token_ref, amountBurned: body.amount });
+});
+
 route("GET", "/tokens/popular", async (_p, q, _req, res) => {
   const limit = parseInt(q.limit || "20", 10);
   await ensureConnected();

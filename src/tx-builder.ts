@@ -121,6 +121,84 @@ export interface TransferTokenParams {
   feePerByte?: number;
 }
 
+export interface TokenUtxo {
+  /** Token reference in txid_vout format */
+  tokenRef: string;
+  txid: string;
+  vout: number;
+  height: number;
+  /** UTXO value in satoshis (carries the token) */
+  satoshis: number;
+}
+
+export interface TokenUtxoResult {
+  address: string;
+  tokens: TokenUtxo[];
+  /** Raw UTXO set for the address (all UTXOs, not just token-bearing ones) */
+  allUtxos: RawUTXO[];
+}
+
+export interface BuildTxOutput {
+  address: string;
+  satoshis: number;
+}
+
+export interface BuildTransactionParams {
+  wif: string;
+  outputs: BuildTxOutput[];
+  changeAddress?: string;
+  feePerByte?: number;
+  /** If true, build and sign but do NOT broadcast. Returns rawTx hex only. */
+  dryRun?: boolean;
+}
+
+export interface DryRunResult {
+  txid: string;
+  rawTx: string;
+  fee: number;
+  feeSatoshis: number;
+  sizeBytes: number;
+  inputCount: number;
+  outputCount: number;
+  inputs: Array<{ txid: string; vout: number; value: number }>;
+  outputs: Array<{ address?: string; satoshis: number }>;
+  broadcasted: false;
+}
+
+export interface EstimateFeeParams {
+  /** Number of inputs (P2PKH) */
+  inputCount: number;
+  /** Number of P2PKH outputs */
+  outputCount: number;
+  /** Sizes of any OP_RETURN data payloads in bytes */
+  opReturnSizes?: number[];
+  feePerByte?: number;
+}
+
+export interface EstimateFeeResult {
+  estimatedBytes: number;
+  feePerByte: number;
+  feeSatoshis: number;
+  feeRxd: string;
+}
+
+export interface SendBatchParams {
+  wif: string;
+  outputs: BuildTxOutput[];
+  changeAddress?: string;
+  feePerByte?: number;
+}
+
+export interface BurnTokenParams {
+  wif: string;
+  /** Token reference in txid_vout format */
+  tokenRef: string;
+  /** Amount to burn in base units (use full balance for NFT) */
+  amount: number;
+  changeAddress?: string;
+  feePerByte?: number;
+}
+
 export interface MintResult {
   commitTxid: string;
   commitRawTx: string;
@@ -482,6 +560,249 @@ export async function transferToken(
 
   const txid = await electrumx.broadcastTransaction(result.rawTx);
   return { ...result, txid: txid as string, broadcasted: true };
+}
+
+/**
+ * Discover all token UTXOs held by an address.
+ *
+ * Queries glyph.list_tokens for the address and cross-references with the
+ * UTXO set so agents can discover what they hold without prior knowledge of
+ * token references.
+ *
+ * Returns each token's UTXO ref + satoshi value alongside the full raw UTXO
+ * list so callers can immediately proceed to transfer/burn without a second
+ * round-trip.
+ */
+export async function getTokenUtxos(
+  electrumx: ElectrumxClient,
+  address: string,
+): Promise<TokenUtxoResult> {
+  const scripthash = addressToScripthash(address);
+
+  const [rawTokens, rawUtxos] = await Promise.all([
+    electrumx.glyphListTokens(scripthash, 500) as Promise<unknown>,
+    electrumx.listUnspent(scripthash),
+  ]);
+
+  // Build a lookup map: "txid_vout" → UTXO for fast cross-reference
+  const utxoMap = new Map<string, RawUTXO>();
+  for (const u of rawUtxos as RawUTXO[]) {
+    utxoMap.set(`${u.tx_hash}_${u.tx_pos}`, u);
+  }
+
+  // Normalise the token list — RXinDexer returns objects with a `ref` field
+  const tokenList = Array.isArray(rawTokens) ? rawTokens : [];
+  const tokens: TokenUtxo[] = [];
+
+  for (const t of tokenList) {
+    const ref: string = (t as Record<string, unknown>).ref as string
+      || (t as Record<string, unknown>).token_ref as string
+      || "";
+    if (!ref) continue;
+
+    const normalised = ref.replace(":", "_");
+    const [txid, voutStr] = normalised.split("_");
+    const vout = parseInt(voutStr ?? "0", 10);
+    const utxo = utxoMap.get(normalised);
+
+    tokens.push({
+      tokenRef: normalised,
+      txid,
+      vout,
+      height: utxo?.height ?? 0,
+      satoshis: utxo?.value ?? 0,
+    });
+  }
+
+  return { address, tokens, allUtxos: rawUtxos as RawUTXO[] };
+}
+
+/**
+ * Build (and optionally sign) a transaction without broadcasting.
+ *
+ * When dryRun=true (default): builds, signs, returns raw hex + fee breakdown.
+ * When dryRun=false: also broadcasts and returns txid.
+ *
+ * Useful for agents to inspect fee, size, and outputs before committing to
+ * a high-value operation.
+ */
+export async function buildTransaction(
+  electrumx: ElectrumxClient,
+  fromAddress: string,
+  params: BuildTransactionParams,
+): Promise<DryRunResult | (BuildResult & { broadcasted: boolean })> {
+  const feePerByte = params.feePerByte ?? FEE_PER_BYTE;
+  const changeAddress = params.changeAddress ?? fromAddress;
+  const dryRun = params.dryRun !== false; // default true
+
+  if (!params.outputs.length) throw new Error("At least one output required");
+
+  const totalOut = params.outputs.reduce((s, o) => s + o.satoshis, 0);
+
+  const utxos = await electrumx.listUnspent(addressToScripthash(fromAddress));
+  if (!(utxos as RawUTXO[]).length) throw new Error("No UTXOs available");
+
+  const { selected } = selectCoins(
+    utxos as RawUTXO[],
+    totalOut,
+    feePerByte,
+    params.outputs.length,
+  );
+
+  const result = buildAndSign(
+    selected,
+    fromAddress,
+    params.outputs.map((o) => ({ address: o.address, satoshis: o.satoshis })),
+    changeAddress,
+    params.wif,
+    feePerByte,
+  );
+
+  const sizeBytes = Math.ceil(result.rawTx.length / 2);
+
+  if (dryRun) {
+    return {
+      txid: result.txid,
+      rawTx: result.rawTx,
+      fee: result.fee,
+      feeSatoshis: result.fee,
+      sizeBytes,
+      inputCount: result.inputCount,
+      outputCount: result.outputCount,
+      inputs: selected.map((u) => ({ txid: u.tx_hash, vout: u.tx_pos, value: u.value })),
+      outputs: params.outputs,
+      broadcasted: false,
+    };
+  }
+
+  const txid = await electrumx.broadcastTransaction(result.rawTx);
+  return { ...result, txid: txid as string, broadcasted: true };
+}
+
+/**
+ * Estimate transaction fee without building a real transaction.
+ *
+ * Pure arithmetic — no network call required.
+ */
+export function estimateTxFee(params: EstimateFeeParams): EstimateFeeResult {
+  const feePerByte = params.feePerByte ?? FEE_PER_BYTE;
+  const estimatedBytes = estimateTxSize(
+    params.inputCount,
+    params.outputCount,
+    params.opReturnSizes ?? [],
+  );
+  const feeSatoshis = estimatedBytes * feePerByte;
+  const feeRxd = (feeSatoshis / 1e8).toFixed(8);
+  return { estimatedBytes, feePerByte, feeSatoshis, feeRxd };
+}
+
+/**
+ * Send RXD to multiple recipients in a single transaction (batch/fan-out).
+ *
+ * Significantly cheaper than N separate transactions because inputs are
+ * selected once and change is returned in a single output.
+ */
+export async function sendBatch(
+  electrumx: ElectrumxClient,
+  fromAddress: string,
+  params: SendBatchParams,
+): Promise<BuildResult & { broadcasted: boolean }> {
+  if (!params.outputs.length) throw new Error("At least one output required");
+
+  const feePerByte = params.feePerByte ?? FEE_PER_BYTE;
+  const changeAddress = params.changeAddress ?? fromAddress;
+  const totalOut = params.outputs.reduce((s, o) => s + o.satoshis, 0);
+
+  const utxos = await electrumx.listUnspent(addressToScripthash(fromAddress));
+  if (!(utxos as RawUTXO[]).length) throw new Error("No UTXOs available");
+
+  const { selected } = selectCoins(
+    utxos as RawUTXO[],
+    totalOut,
+    feePerByte,
+    params.outputs.length,
+  );
+
+  const result = buildAndSign(
+    selected,
+    fromAddress,
+    params.outputs.map((o) => ({ address: o.address, satoshis: o.satoshis })),
+    changeAddress,
+    params.wif,
+    feePerByte,
+  );
+
+  const txid = await electrumx.broadcastTransaction(result.rawTx);
+  return { ...result, txid: txid as string, broadcasted: true };
+}
+
+/**
+ * Burn a Glyph token (protocol 6 — explicit burn).
+ *
+ * Builds a transaction that spends the token UTXO and sends it to an
+ * OP_FALSE OP_RETURN output (unspendable), permanently destroying the token.
+ * The Glyph envelope carries protocol ID 6 (BURN) as the action marker.
+ *
+ * A separate fee-covering UTXO is used if the token UTXO value is insufficient.
+ */
+export async function burnToken(
+  electrumx: ElectrumxClient,
+  fromAddress: string,
+  params: BurnTokenParams,
+): Promise<BuildResult & { broadcasted: boolean; burnScript: string }> {
+  const feePerByte = params.feePerByte ?? FEE_PER_BYTE;
+  const changeAddress = params.changeAddress ?? fromAddress;
+
+  const [refTxid, refVoutStr] = params.tokenRef.split("_");
+  const refVout = parseInt(refVoutStr ?? "0", 10);
+
+  const allUtxos = (await electrumx.listUnspent(
+    addressToScripthash(fromAddress),
+  )) as RawUTXO[];
+
+  const tokenUtxo = allUtxos.find(
+    (u) => u.tx_hash === refTxid && u.tx_pos === refVout,
+  );
+  if (!tokenUtxo) {
+    throw new Error(
+      `Token UTXO ${params.tokenRef} not found at address ${fromAddress}`,
+    );
+  }
+
+  // Build Glyph burn envelope: protocol 6 action marker
+  const burnMetadata = Buffer.from(
+    JSON.stringify({ p: [6], ref: params.tokenRef, amount: params.amount }),
+    "utf8",
+  );
+  const burnScript = buildOpReturnScript([burnMetadata]);
+  const burnScriptHex = burnScript.toString("hex");
+
+  // Select fee-covering UTXOs (excluding token UTXO)
+  const feeUtxos = allUtxos.filter(
+    (u) => !(u.tx_hash === refTxid && u.tx_pos === refVout),
+  );
+  const estimatedFee = estimateTxSize(2, 1) * feePerByte;
+
+  let selectedUtxos: RawUTXO[];
+  if (tokenUtxo.value >= estimatedFee + DUST_SATOSHIS) {
+    selectedUtxos = [tokenUtxo];
+  } else {
+    const needed = estimatedFee + DUST_SATOSHIS;
+    const { selected: feeSelected } = selectCoins(feeUtxos, needed, feePerByte, 1);
+    selectedUtxos = [tokenUtxo, ...feeSelected];
+  }
+
+  const result = buildAndSign(
+    selectedUtxos,
+    fromAddress,
+    [{ script: burnScript, satoshis: 0 }],
+    changeAddress,
+    params.wif,
+    feePerByte,
+  );
+
+  const txid = await electrumx.broadcastTransaction(result.rawTx);
+  return { ...result, txid: txid as string, broadcasted: true, burnScript: burnScriptHex };
 }
 
 // ────────────────────────────────────────────────────────────

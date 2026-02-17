@@ -419,4 +419,24 @@ export class ElectrumxClient extends EventEmitter {
   async swapGetHistory(ref: string, limit = 100, offset = 0): Promise<unknown> {
     return this.request("swap.get_history", [ref, limit, offset]);
   }
+
+  // ──────────────────────────────────────────────
+  // Subscription methods
+  // ──────────────────────────────────────────────
+
+  /**
+   * Subscribe to scripthash status changes (ElectrumX push notifications).
+   * Returns the current status hash. Future changes arrive as "notification"
+   * events on this EventEmitter with method "blockchain.scripthash.subscribe".
+   */
+  async subscribeScripthash(scripthash: string): Promise<string | null> {
+    return this.request("blockchain.scripthash.subscribe", [scripthash]);
+  }
+
+  /**
+   * Unsubscribe from scripthash notifications.
+   */
+  async unsubscribeScripthash(scripthash: string): Promise<boolean> {
+    return this.request("blockchain.scripthash.unsubscribe", [scripthash]);
+  }
 }

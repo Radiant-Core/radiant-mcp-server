@@ -94,7 +94,7 @@ function jsonText(data: unknown) {
 
 const server = new McpServer({
   name: "radiant-mcp-server",
-  version: "1.3.0",
+  version: "1.4.0",
 });
 
 // ════════════════════════════════════════════════════════════
@@ -1331,6 +1331,242 @@ server.tool(
         feePerByte: fee_per_byte,
       });
       return { content: [jsonText(result)] };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  },
+);
+
+// ════════════════════════════════════════════════════════════
+//  TOOLS — Agent Enhancements (v1.4.0)
+// ════════════════════════════════════════════════════════════
+
+server.tool(
+  "radiant_get_token_utxos",
+  "Discover all Glyph tokens held by an address. Returns each token's UTXO reference (tokenRef), txid, vout, height, and satoshi value. Agents can use this to discover what they hold without prior knowledge of token references, then pass tokenRef directly to radiant_transfer_token or radiant_burn_token.",
+  {
+    address: z.string().describe("Radiant address to query"),
+  },
+  async ({ address }) => {
+    try {
+      if (!isValidAddress(address)) {
+        return { content: [{ type: "text", text: "Error: Invalid Radiant address" }], isError: true };
+      }
+      await ensureConnected();
+      const { getTokenUtxos } = await import("./tx-builder.js");
+      const result = await getTokenUtxos(electrumx, address);
+      return {
+        content: [jsonText({
+          address: result.address,
+          tokenCount: result.tokens.length,
+          tokens: result.tokens,
+          rxdUtxoCount: result.allUtxos.length,
+          totalRxdSatoshis: result.allUtxos.reduce((s, u) => s + u.value, 0),
+          note: "Use tokenRef values with radiant_transfer_token or radiant_burn_token.",
+        })],
+      };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  },
+);
+
+server.tool(
+  "radiant_build_transaction",
+  "Build and sign a transaction in dry-run mode — returns the raw hex, fee, and size WITHOUT broadcasting. Critical for high-value operations: inspect the transaction before committing. Set dry_run=false to also broadcast after building.",
+  {
+    wif: z.string().describe("WIF-encoded private key of the sender"),
+    outputs: z.array(z.object({
+      address: z.string().describe("Recipient Radiant address"),
+      satoshis: z.number().int().positive().describe("Amount in photons"),
+    })).min(1).describe("Array of {address, satoshis} outputs"),
+    change_address: z.string().optional().describe("Change address (defaults to sender address)"),
+    fee_per_byte: z.number().int().positive().default(1).describe("Fee rate in satoshis per byte"),
+    dry_run: z.boolean().default(true).describe("If true (default), build and sign but do NOT broadcast. Set false to broadcast."),
+  },
+  async ({ wif, outputs, change_address, fee_per_byte, dry_run }) => {
+    try {
+      const { AgentWallet } = await import("./wallet.js");
+      const { buildTransaction } = await import("./tx-builder.js");
+      const wallet = AgentWallet.fromWIF(wif);
+      await ensureConnected();
+      const result = await buildTransaction(electrumx, wallet.address, {
+        wif,
+        outputs,
+        changeAddress: change_address,
+        feePerByte: fee_per_byte,
+        dryRun: dry_run,
+      });
+      return { content: [jsonText(result)] };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  },
+);
+
+server.tool(
+  "radiant_estimate_tx_fee",
+  "Estimate transaction fee in satoshis given input/output counts. Pure arithmetic — no network call. Use this to budget before building a transaction. Supports OP_RETURN outputs (e.g., for token minting).",
+  {
+    input_count: z.number().int().min(1).describe("Number of P2PKH inputs"),
+    output_count: z.number().int().min(1).describe("Number of P2PKH outputs (include change output)"),
+    op_return_sizes: z.array(z.number().int().min(0)).optional().describe("Sizes in bytes of any OP_RETURN data payloads (e.g., [80] for an 80-byte Glyph envelope)"),
+    fee_per_byte: z.number().int().positive().default(1).describe("Fee rate in satoshis per byte (default: 1)"),
+  },
+  async ({ input_count, output_count, op_return_sizes, fee_per_byte }) => {
+    try {
+      const { estimateTxFee } = await import("./tx-builder.js");
+      const result = estimateTxFee({
+        inputCount: input_count,
+        outputCount: output_count,
+        opReturnSizes: op_return_sizes,
+        feePerByte: fee_per_byte,
+      });
+      return {
+        content: [jsonText({
+          ...result,
+          note: `Standard P2PKH: input≈148B, output≈34B, overhead≈10B. Total for ${input_count}in/${output_count}out: ${result.estimatedBytes}B`,
+        })],
+      };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  },
+);
+
+server.tool(
+  "radiant_send_batch",
+  "Send RXD to multiple recipients in a single transaction. Much cheaper than N separate transactions — inputs are selected once and change is returned in a single output. Ideal for agent fan-out payments (e.g., paying multiple service providers).",
+  {
+    wif: z.string().describe("WIF-encoded private key of the sender"),
+    outputs: z.array(z.object({
+      address: z.string().describe("Recipient Radiant address"),
+      satoshis: z.number().int().positive().describe("Amount in photons"),
+    })).min(1).max(100).describe("Array of {address, satoshis} recipients (max 100)"),
+    change_address: z.string().optional().describe("Change address (defaults to sender address)"),
+    fee_per_byte: z.number().int().positive().default(1).describe("Fee rate in satoshis per byte"),
+  },
+  async ({ wif, outputs, change_address, fee_per_byte }) => {
+    try {
+      const { AgentWallet } = await import("./wallet.js");
+      const { sendBatch } = await import("./tx-builder.js");
+      const wallet = AgentWallet.fromWIF(wif);
+      await ensureConnected();
+      const result = await sendBatch(electrumx, wallet.address, {
+        wif,
+        outputs,
+        changeAddress: change_address,
+        feePerByte: fee_per_byte,
+      });
+      return {
+        content: [jsonText({
+          ...result,
+          recipientCount: outputs.length,
+          totalSent: outputs.reduce((s, o) => s + o.satoshis, 0),
+        })],
+      };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  },
+);
+
+server.tool(
+  "radiant_watch_address",
+  "Subscribe to real-time payment notifications for a Radiant address via ElectrumX scripthash subscription. Returns the current status hash and subscribes to future changes. Notifications arrive as ElectrumX push events (blockchain.scripthash.subscribe). Use this instead of polling for payment detection.",
+  {
+    address: z.string().describe("Radiant address to watch"),
+  },
+  async ({ address }) => {
+    try {
+      if (!isValidAddress(address)) {
+        return { content: [{ type: "text", text: "Error: Invalid Radiant address" }], isError: true };
+      }
+      await ensureConnected();
+      const scripthash = addressToScripthash(address);
+      const statusHash = await electrumx.subscribeScripthash(scripthash);
+      const balance = await electrumx.getBalance(scripthash);
+      const utxos = await electrumx.listUnspent(scripthash);
+      return {
+        content: [jsonText({
+          address,
+          scripthash,
+          statusHash,
+          currentBalance: {
+            confirmed: { satoshis: balance.confirmed, rxd: satoshisToRxd(balance.confirmed) },
+            unconfirmed: { satoshis: balance.unconfirmed, rxd: satoshisToRxd(balance.unconfirmed) },
+          },
+          utxoCount: (utxos as unknown[]).length,
+          subscribed: true,
+          note: "Address is now subscribed. ElectrumX will push notifications when the scripthash status changes (new tx received or confirmed). The statusHash changes whenever the UTXO set changes.",
+        })],
+      };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  },
+);
+
+server.tool(
+  "radiant_derive_address",
+  "Derive a Radiant address from a BIP39 mnemonic and BIP32 derivation path. Lets agents manage per-task sub-wallets from a single root key. Returns the address, public key, and WIF for the derived key. Use different account/index values to generate isolated sub-wallets.",
+  {
+    mnemonic: z.string().describe("BIP39 mnemonic phrase (12-24 words, space-separated)"),
+    path: z.string().default("m/44'/0'/0'/0/0").describe("BIP32 derivation path (e.g. m/44'/0'/0'/0/1 for second address, m/44'/0'/1'/0/0 for second account)"),
+    network: z.enum(["mainnet", "testnet"]).default("mainnet").describe("Network"),
+    passphrase: z.string().default("").describe("Optional BIP39 passphrase"),
+  },
+  async ({ mnemonic, path, network, passphrase }) => {
+    try {
+      const { AgentWallet } = await import("./wallet.js");
+      const wallet = AgentWallet.fromMnemonic(mnemonic, network, passphrase, path);
+      return {
+        content: [jsonText({
+          address: wallet.address,
+          publicKey: wallet.getPublicKeyHex(),
+          wif: wallet.getWIF(),
+          derivationPath: path,
+          network,
+          note: "Derive different paths from the same mnemonic to create isolated sub-wallets for separate tasks or payment channels.",
+        })],
+      };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  },
+);
+
+server.tool(
+  "radiant_burn_token",
+  "Permanently burn (destroy) a Glyph token using protocol 6 (explicit burn). Spends the token UTXO into an OP_FALSE OP_RETURN output with a Glyph burn envelope. Use this to retire tokens cleanly — the burn is recorded on-chain and verifiable. Requires a WIF private key.",
+  {
+    wif: z.string().describe("WIF-encoded private key of the token holder"),
+    token_ref: z.string().describe("Token reference in txid_vout format (e.g. 'abc123...def_0'). Use radiant_get_token_utxos to discover refs."),
+    amount: z.number().int().positive().describe("Amount to burn in base units (use full balance for NFT, or partial for FT)"),
+    change_address: z.string().optional().describe("Change address for any leftover RXD (defaults to sender address)"),
+    fee_per_byte: z.number().int().positive().default(1).describe("Fee rate in satoshis per byte"),
+  },
+  async ({ wif, token_ref, amount, change_address, fee_per_byte }) => {
+    try {
+      const { AgentWallet } = await import("./wallet.js");
+      const { burnToken } = await import("./tx-builder.js");
+      const wallet = AgentWallet.fromWIF(wif);
+      await ensureConnected();
+      const result = await burnToken(electrumx, wallet.address, {
+        wif,
+        tokenRef: token_ref,
+        amount,
+        changeAddress: change_address,
+        feePerByte: fee_per_byte,
+      });
+      return {
+        content: [jsonText({
+          ...result,
+          tokenRef: token_ref,
+          amountBurned: amount,
+          note: "Token has been permanently destroyed. The burn transaction is recorded on-chain with a Glyph protocol 6 envelope.",
+        })],
+      };
     } catch (err) {
       return errorResponse(err);
     }
