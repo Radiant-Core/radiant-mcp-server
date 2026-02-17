@@ -680,6 +680,99 @@ route("POST", "/script/compile", async (_p, _q, req, res) => {
   json(res, result);
 });
 
+// ════════════════════════════════════════════════════════════
+//  ROUTES — Token Transactions
+// ════════════════════════════════════════════════════════════
+
+route("POST", "/tx/send", async (_p, _q, req, res) => {
+  const body = JSON.parse(await readBody(req));
+  if (!body.wif) return error(res, "Missing wif (WIF-encoded private key)");
+  if (!body.to_address) return error(res, "Missing to_address");
+  if (!body.satoshis || typeof body.satoshis !== "number") return error(res, "Missing satoshis (number)");
+  const { AgentWallet } = await import("./wallet.js");
+  const { sendRxd } = await import("./tx-builder.js");
+  const wallet = AgentWallet.fromWIF(body.wif);
+  await ensureConnected();
+  const result = await sendRxd(electrumx, wallet.address, {
+    wif: body.wif,
+    toAddress: body.to_address,
+    satoshis: body.satoshis,
+    changeAddress: body.change_address,
+    feePerByte: body.fee_per_byte ?? 1,
+  });
+  json(res, result);
+});
+
+route("POST", "/token/create/ft", async (_p, _q, req, res) => {
+  const body = JSON.parse(await readBody(req));
+  if (!body.wif) return error(res, "Missing wif");
+  if (!body.name) return error(res, "Missing name");
+  if (!body.ticker) return error(res, "Missing ticker");
+  if (!body.supply || typeof body.supply !== "number") return error(res, "Missing supply (number)");
+  const { AgentWallet } = await import("./wallet.js");
+  const { createFungibleToken } = await import("./tx-builder.js");
+  const wallet = AgentWallet.fromWIF(body.wif);
+  await ensureConnected();
+  const metadata: Record<string, unknown> = {
+    p: [1],
+    name: body.name,
+    ticker: body.ticker,
+    decimals: body.decimals ?? 8,
+  };
+  if (body.description) metadata.desc = body.description;
+  if (body.image) metadata.image = body.image;
+  const result = await createFungibleToken(electrumx, wallet.address, {
+    wif: body.wif,
+    supply: body.supply,
+    metadata: metadata as import("./tx-builder.js").GlyphMetadata,
+    changeAddress: body.change_address,
+    feePerByte: body.fee_per_byte ?? 1,
+  });
+  json(res, result);
+});
+
+route("POST", "/token/create/nft", async (_p, _q, req, res) => {
+  const body = JSON.parse(await readBody(req));
+  if (!body.wif) return error(res, "Missing wif");
+  if (!body.name) return error(res, "Missing name");
+  const { AgentWallet } = await import("./wallet.js");
+  const { createNFT } = await import("./tx-builder.js");
+  const wallet = AgentWallet.fromWIF(body.wif);
+  await ensureConnected();
+  const metadata: Record<string, unknown> = { p: [2], name: body.name };
+  if (body.description) metadata.desc = body.description;
+  if (body.image) metadata.image = body.image;
+  if (body.attributes) metadata.attrs = body.attributes;
+  const result = await createNFT(electrumx, wallet.address, {
+    wif: body.wif,
+    metadata: metadata as import("./tx-builder.js").GlyphMetadata,
+    changeAddress: body.change_address,
+    feePerByte: body.fee_per_byte ?? 1,
+  });
+  json(res, result);
+});
+
+route("POST", "/token/transfer", async (_p, _q, req, res) => {
+  const body = JSON.parse(await readBody(req));
+  if (!body.wif) return error(res, "Missing wif");
+  if (!body.to_address) return error(res, "Missing to_address");
+  if (!body.token_ref) return error(res, "Missing token_ref (txid_vout format)");
+  if (!body.amount || typeof body.amount !== "number") return error(res, "Missing amount (number)");
+  const { AgentWallet } = await import("./wallet.js");
+  const { transferToken } = await import("./tx-builder.js");
+  const wallet = AgentWallet.fromWIF(body.wif);
+  await ensureConnected();
+  const result = await transferToken(electrumx, wallet.address, {
+    wif: body.wif,
+    toAddress: body.to_address,
+    tokenRef: body.token_ref,
+    amount: body.amount,
+    changeAddress: body.change_address,
+    feePerByte: body.fee_per_byte ?? 1,
+  });
+  json(res, result);
+});
+
 route("GET", "/tokens/popular", async (_p, q, _req, res) => {
   const limit = parseInt(q.limit || "20", 10);
   await ensureConnected();

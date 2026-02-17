@@ -94,7 +94,7 @@ function jsonText(data: unknown) {
 
 const server = new McpServer({
   name: "radiant-mcp-server",
-  version: "1.2.0",
+  version: "1.3.0",
 });
 
 // ════════════════════════════════════════════════════════════
@@ -1192,6 +1192,144 @@ server.tool(
       if (!result.success) {
         return { content: [{ type: "text" as const, text: `Compilation error: ${result.error}\n${result.details || ""}` }], isError: true };
       }
+      return { content: [jsonText(result)] };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  },
+);
+
+// ════════════════════════════════════════════════════════════
+//  TOOLS — Token Transactions (requires WIF key)
+// ════════════════════════════════════════════════════════════
+
+server.tool(
+  "radiant_send_rxd",
+  "Send RXD (photons) to an address. Fetches UTXOs, selects coins, builds, signs, and broadcasts the transaction. Requires a WIF private key for the sender address.",
+  {
+    wif: z.string().describe("WIF-encoded private key of the sender"),
+    to_address: z.string().describe("Recipient Radiant address"),
+    satoshis: z.number().int().positive().describe("Amount to send in photons (satoshis). 1 RXD = 100,000,000 photons"),
+    change_address: z.string().optional().describe("Change address (defaults to sender address)"),
+    fee_per_byte: z.number().int().positive().default(1).describe("Fee rate in satoshis per byte (default: 1)"),
+  },
+  async ({ wif, to_address, satoshis, change_address, fee_per_byte }) => {
+    try {
+      const { AgentWallet } = await import("./wallet.js");
+      const { sendRxd } = await import("./tx-builder.js");
+      const wallet = AgentWallet.fromWIF(wif);
+      await ensureConnected();
+      const result = await sendRxd(electrumx, wallet.address, {
+        wif,
+        toAddress: to_address,
+        satoshis,
+        changeAddress: change_address,
+        feePerByte: fee_per_byte,
+      });
+      return { content: [jsonText(result)] };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  },
+);
+
+server.tool(
+  "radiant_create_ft",
+  "Mint a new Glyph Fungible Token (FT) on Radiant. Uses the 2-transaction commit+reveal pattern. Returns both transaction IDs and the token reference (tokenRef) for future transfers. Requires a WIF private key.",
+  {
+    wif: z.string().describe("WIF-encoded private key of the minter"),
+    name: z.string().describe("Token name (e.g. 'My Token')"),
+    ticker: z.string().describe("Token ticker symbol (e.g. 'MTK')"),
+    supply: z.number().int().positive().describe("Total supply in base units (e.g. 1000000 for 10.000000 with 6 decimals)"),
+    decimals: z.number().int().min(0).max(18).default(8).describe("Decimal places (default: 8)"),
+    description: z.string().optional().describe("Token description"),
+    image: z.string().optional().describe("Image URL or IPFS CID"),
+    change_address: z.string().optional().describe("Change address (defaults to minter address)"),
+    fee_per_byte: z.number().int().positive().default(1).describe("Fee rate in satoshis per byte"),
+  },
+  async ({ wif, name, ticker, supply, decimals, description, image, change_address, fee_per_byte }) => {
+    try {
+      const { AgentWallet } = await import("./wallet.js");
+      const { createFungibleToken } = await import("./tx-builder.js");
+      const wallet = AgentWallet.fromWIF(wif);
+      await ensureConnected();
+      const metadata: Record<string, unknown> = { p: [1], name, ticker, decimals };
+      if (description) metadata.desc = description;
+      if (image) metadata.image = image;
+      const result = await createFungibleToken(electrumx, wallet.address, {
+        wif,
+        supply,
+        metadata: metadata as import("./tx-builder.js").GlyphMetadata,
+        changeAddress: change_address,
+        feePerByte: fee_per_byte,
+      });
+      return { content: [jsonText(result)] };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  },
+);
+
+server.tool(
+  "radiant_create_nft",
+  "Mint a new Glyph Non-Fungible Token (NFT) on Radiant. Uses the 2-transaction commit+reveal pattern. Returns both transaction IDs and the token reference (tokenRef). Requires a WIF private key.",
+  {
+    wif: z.string().describe("WIF-encoded private key of the minter"),
+    name: z.string().describe("NFT name"),
+    description: z.string().optional().describe("NFT description"),
+    image: z.string().optional().describe("Image URL or IPFS CID"),
+    attributes: z.record(z.unknown()).optional().describe("Arbitrary NFT attributes as a JSON object"),
+    change_address: z.string().optional().describe("Change address (defaults to minter address)"),
+    fee_per_byte: z.number().int().positive().default(1).describe("Fee rate in satoshis per byte"),
+  },
+  async ({ wif, name, description, image, attributes, change_address, fee_per_byte }) => {
+    try {
+      const { AgentWallet } = await import("./wallet.js");
+      const { createNFT } = await import("./tx-builder.js");
+      const wallet = AgentWallet.fromWIF(wif);
+      await ensureConnected();
+      const metadata: Record<string, unknown> = { p: [2], name };
+      if (description) metadata.desc = description;
+      if (image) metadata.image = image;
+      if (attributes) metadata.attrs = attributes;
+      const result = await createNFT(electrumx, wallet.address, {
+        wif,
+        metadata: metadata as import("./tx-builder.js").GlyphMetadata,
+        changeAddress: change_address,
+        feePerByte: fee_per_byte,
+      });
+      return { content: [jsonText(result)] };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  },
+);
+
+server.tool(
+  "radiant_transfer_token",
+  "Transfer a Glyph token (FT or NFT) to another address. The token UTXO must be at the sender's address. For FTs provide the amount in base units; for NFTs use amount=1. Requires a WIF private key.",
+  {
+    wif: z.string().describe("WIF-encoded private key of the current token holder"),
+    to_address: z.string().describe("Recipient Radiant address"),
+    token_ref: z.string().describe("Token reference in txid_vout format (e.g. 'abc123...def_0')"),
+    amount: z.number().int().positive().describe("Amount in base units to transfer (use 1 for NFTs)"),
+    change_address: z.string().optional().describe("Change address (defaults to sender address)"),
+    fee_per_byte: z.number().int().positive().default(1).describe("Fee rate in satoshis per byte"),
+  },
+  async ({ wif, to_address, token_ref, amount, change_address, fee_per_byte }) => {
+    try {
+      const { AgentWallet } = await import("./wallet.js");
+      const { transferToken } = await import("./tx-builder.js");
+      const wallet = AgentWallet.fromWIF(wif);
+      await ensureConnected();
+      const result = await transferToken(electrumx, wallet.address, {
+        wif,
+        toAddress: to_address,
+        tokenRef: token_ref,
+        amount,
+        changeAddress: change_address,
+        feePerByte: fee_per_byte,
+      });
       return { content: [jsonText(result)] };
     } catch (err) {
       return errorResponse(err);

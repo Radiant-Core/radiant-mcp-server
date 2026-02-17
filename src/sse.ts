@@ -34,7 +34,7 @@ async function startSSE(): Promise<void> {
 
   const server = new McpServer({
     name: "radiant-mcp-server",
-    version: "1.2.0",
+    version: "1.3.0",
   });
 
   // Register a health-check tool so clients can verify the SSE connection works
@@ -93,7 +93,7 @@ async function startSSE(): Promise<void> {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
         name: "Radiant MCP Server (SSE)",
-        version: "1.2.0",
+        version: "1.3.0",
         transport: "sse",
         endpoints: {
           sse: `http://localhost:${SSE_PORT}/sse`,

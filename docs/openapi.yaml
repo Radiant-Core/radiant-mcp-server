@@ -9,7 +9,7 @@ info:
 
     All endpoints return JSON. Amounts are in photons (1 RXD = 100,000,000 photons)
     unless otherwise noted.
-  version: 1.2.0
+  version: 1.3.0
   contact:
     name: Radiant Core
     url: https://github.com/Radiant-Core
@@ -47,6 +47,10 @@ tags:
     description: Data asset marketplace (Phase 5)
   - name: Script
     description: Offline script decode and compile tools
+  - name: Transaction
+    description: Send RXD and broadcast signed transactions
+  - name: Token
+    description: Glyph token minting (FT/NFT) and transfer
   - name: Health
     description: Connection health monitoring
   - name: Wallet
@@ -1074,3 +1078,152 @@ paths:
                 type: object
                 properties:
                   error: { type: string }
+
+  /tx/send:
+    post:
+      operationId: sendRxd
+      summary: Send RXD to an address
+      description: |
+        Fetches UTXOs for the sender, selects coins, builds a P2PKH transaction,
+        signs it with the provided WIF key, and broadcasts it via ElectrumX.
+      tags: [Transaction]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [wif, to_address, satoshis]
+              properties:
+                wif: { type: string, description: "WIF-encoded private key of the sender" }
+                to_address: { type: string, description: "Recipient Radiant address" }
+                satoshis: { type: integer, description: "Amount in photons (1 RXD = 100,000,000)" }
+                change_address: { type: string, description: "Change address (defaults to sender)" }
+                fee_per_byte: { type: integer, default: 1, description: "Fee rate in sat/byte" }
+      responses:
+        "200":
+          description: Transaction broadcast result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  txid: { type: string }
+                  rawTx: { type: string }
+                  fee: { type: integer }
+                  inputCount: { type: integer }
+                  outputCount: { type: integer }
+                  broadcasted: { type: boolean }
+
+  /token/create/ft:
+    post:
+      operationId: createFungibleToken
+      summary: Mint a Glyph Fungible Token
+      description: |
+        Creates a new Glyph FT using the 2-transaction commit+reveal pattern.
+        Returns both transaction IDs and the token reference for future transfers.
+      tags: [Token]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [wif, name, ticker, supply]
+              properties:
+                wif: { type: string, description: "WIF-encoded private key of the minter" }
+                name: { type: string, description: "Token name" }
+                ticker: { type: string, description: "Token ticker symbol" }
+                supply: { type: integer, description: "Total supply in base units" }
+                decimals: { type: integer, default: 8, description: "Decimal places" }
+                description: { type: string }
+                image: { type: string, description: "Image URL or IPFS CID" }
+                change_address: { type: string }
+                fee_per_byte: { type: integer, default: 1 }
+      responses:
+        "200":
+          description: Mint result with token reference
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  commitTxid: { type: string }
+                  revealTxid: { type: string }
+                  tokenRef: { type: string, description: "Token reference (txid_vout) for transfers" }
+                  commitRawTx: { type: string }
+                  revealRawTx: { type: string }
+                  commitFee: { type: integer }
+                  revealFee: { type: integer }
+
+  /token/create/nft:
+    post:
+      operationId: createNFT
+      summary: Mint a Glyph Non-Fungible Token
+      description: |
+        Creates a new Glyph NFT using the 2-transaction commit+reveal pattern.
+        Returns both transaction IDs and the token reference.
+      tags: [Token]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [wif, name]
+              properties:
+                wif: { type: string, description: "WIF-encoded private key of the minter" }
+                name: { type: string, description: "NFT name" }
+                description: { type: string }
+                image: { type: string, description: "Image URL or IPFS CID" }
+                attributes: { type: object, description: "Arbitrary NFT attributes" }
+                change_address: { type: string }
+                fee_per_byte: { type: integer, default: 1 }
+      responses:
+        "200":
+          description: Mint result with token reference
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  commitTxid: { type: string }
+                  revealTxid: { type: string }
+                  tokenRef: { type: string }
+                  commitFee: { type: integer }
+                  revealFee: { type: integer }
+
+  /token/transfer:
+    post:
+      operationId: transferToken
+      summary: Transfer a Glyph token (FT or NFT)
+      description: |
+        Transfers a Glyph token to another address. The token UTXO must be
+        at the sender's address. Use amount=1 for NFTs.
+      tags: [Token]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [wif, to_address, token_ref, amount]
+              properties:
+                wif: { type: string, description: "WIF-encoded private key of the token holder" }
+                to_address: { type: string, description: "Recipient Radiant address" }
+                token_ref: { type: string, description: "Token reference in txid_vout format" }
+                amount: { type: integer, description: "Amount in base units (1 for NFTs)" }
+                change_address: { type: string }
+                fee_per_byte: { type: integer, default: 1 }
+      responses:
+        "200":
+          description: Transfer result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  txid: { type: string }
+                  rawTx: { type: string }
+                  fee: { type: integer }
+                  broadcasted: { type: boolean }
