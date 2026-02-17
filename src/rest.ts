@@ -668,6 +668,18 @@ route("POST", "/script/decode", async (_p, _q, req, res) => {
   json(res, decoded);
 });
 
+route("POST", "/script/compile", async (_p, _q, req, res) => {
+  const body = JSON.parse(await readBody(req));
+  if (!body.source) return error(res, "Missing source (RadiantScript source code)");
+  const { compileScript } = await import("./compiler.js");
+  const result = await compileScript(body.source, {
+    format: body.format || "artifact",
+    debug: body.debug === true,
+  });
+  if (!result.success) return error(res, `${result.error}: ${result.details || ""}`, 400);
+  json(res, result);
+});
+
 route("GET", "/tokens/popular", async (_p, q, _req, res) => {
   const limit = parseInt(q.limit || "20", 10);
   await ensureConnected();

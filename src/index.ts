@@ -94,7 +94,7 @@ function jsonText(data: unknown) {
 
 const server = new McpServer({
   name: "radiant-mcp-server",
-  version: "1.0.0",
+  version: "1.2.0",
 });
 
 // ════════════════════════════════════════════════════════════
@@ -1167,6 +1167,32 @@ server.tool(
       const { decodeScript } = await import("./script-decode.js");
       const decoded = decodeScript(script_hex);
       return { content: [jsonText(decoded)] };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  },
+);
+
+// ════════════════════════════════════════════════════════════
+//  TOOLS — Script Compile (offline)
+// ════════════════════════════════════════════════════════════
+
+server.tool(
+  "radiant_compile_script",
+  "Compile RadiantScript (.cash/.rxd) source code into a deployment artifact. Returns ABI, ASM bytecode, and hex. Works offline — requires the rxdc compiler binary (set RXDC_PATH env var or ensure RadiantScript repo is a sibling directory).",
+  {
+    source: z.string().describe("RadiantScript source code to compile"),
+    format: z.enum(["artifact", "asm", "hex"]).default("artifact").describe("Output format: full artifact JSON, ASM text, or hex bytecode"),
+    debug: z.boolean().default(false).describe("Include source code and source map in artifact for debugging with rxdeb"),
+  },
+  async ({ source, format, debug }) => {
+    try {
+      const { compileScript } = await import("./compiler.js");
+      const result = await compileScript(source, { format, debug });
+      if (!result.success) {
+        return { content: [{ type: "text" as const, text: `Compilation error: ${result.error}\n${result.details || ""}` }], isError: true };
+      }
+      return { content: [jsonText(result)] };
     } catch (err) {
       return errorResponse(err);
     }

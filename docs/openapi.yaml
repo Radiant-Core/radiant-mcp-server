@@ -9,7 +9,7 @@ info:
 
     All endpoints return JSON. Amounts are in photons (1 RXD = 100,000,000 photons)
     unless otherwise noted.
-  version: 1.1.0
+  version: 1.2.0
   contact:
     name: Radiant Core
     url: https://github.com/Radiant-Core
@@ -45,6 +45,8 @@ tags:
     description: Micropayment channels (Phase 5)
   - name: Marketplace
     description: Data asset marketplace (Phase 5)
+  - name: Script
+    description: Offline script decode and compile tools
   - name: Health
     description: Connection health monitoring
   - name: Wallet
@@ -984,3 +986,91 @@ paths:
                 properties:
                   ref: { type: string }
                   history: { type: array, items: { type: object } }
+
+  /script/decode:
+    post:
+      operationId: decodeScript
+      summary: Decode raw script hex into human-readable opcodes (offline)
+      tags: [Script]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [script_hex]
+              properties:
+                script_hex: { type: string, description: "Script in hexadecimal" }
+      responses:
+        "200":
+          description: Decoded script with opcodes, ASM, and summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  script_hex: { type: string }
+                  length: { type: integer }
+                  opcodes: { type: array, items: { type: object } }
+                  asm: { type: string }
+                  summary:
+                    type: object
+                    properties:
+                      total_ops: { type: integer }
+                      data_pushes: { type: integer }
+                      has_state_separator: { type: boolean }
+                      has_references: { type: boolean }
+                      has_v2_opcodes: { type: boolean }
+                      script_type: { type: string }
+
+  /script/compile:
+    post:
+      operationId: compileScript
+      summary: Compile RadiantScript source code into a deployment artifact (offline)
+      description: |
+        Compiles `.cash`/`.rxd` source code using the rxdc compiler.
+        Requires the rxdc binary (set RXDC_PATH env var or place RadiantScript repo as sibling).
+        Returns ABI, ASM bytecode, and optional hex output.
+      tags: [Script]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source]
+              properties:
+                source: { type: string, description: "RadiantScript source code" }
+                format: { type: string, enum: [artifact, asm, hex], default: artifact, description: "Output format" }
+                debug: { type: boolean, default: false, description: "Include source and source map for rxdeb debugging" }
+      responses:
+        "200":
+          description: Compilation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  artifact:
+                    type: object
+                    properties:
+                      version: { type: integer }
+                      compilerVersion: { type: string }
+                      contract: { type: string }
+                      abi: { type: array, items: { type: object } }
+                      asm: { type: string }
+                      hex: { type: string }
+                      source: { type: string }
+                      sourceMap: { type: object }
+                  asm: { type: string }
+                  hex: { type: string }
+                  warnings: { type: array, items: { type: string } }
+        "400":
+          description: Compilation error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
