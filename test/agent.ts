@@ -287,7 +287,7 @@ async function main() {
     const words = mnemonic.split(" ");
     assert(words.length === 12, `12 words: ${words.length}`);
     assert(mnWallet.address.startsWith("1"), `mainnet address: ${mnWallet.address.slice(0, 6)}...`);
-    assert(path === "m/44'/0'/0'/0/0", `default path: ${path}`);
+    assert(path === "m/44'/512'/0'/0/0", `default path: ${path}`);
     assert(mnWallet.getPublicKeyHex().length === 66, `pubkey length: ${mnWallet.getPublicKeyHex().length}`);
 
     // Verify info includes mnemonic
@@ -345,12 +345,12 @@ async function main() {
   console.log("\nTest 25: BIP39 different derivation paths");
   try {
     const { mnemonic: mPath } = AgentWallet.generateWithMnemonic("mainnet", 12);
-    const w0 = AgentWallet.fromMnemonic(mPath, "mainnet", "", "m/44'/0'/0'/0/0");
-    const w1 = AgentWallet.fromMnemonic(mPath, "mainnet", "", "m/44'/0'/0'/0/1");
+    const w0 = AgentWallet.fromMnemonic(mPath, "mainnet", "", "m/44'/512'/0'/0/0");
+    const w1 = AgentWallet.fromMnemonic(mPath, "mainnet", "", "m/44'/512'/0'/0/1");
     assert(w0.address !== w1.address, `index 0 ≠ index 1`);
 
     // Same path = same address
-    const w0again = AgentWallet.fromMnemonic(mPath, "mainnet", "", "m/44'/0'/0'/0/0");
+    const w0again = AgentWallet.fromMnemonic(mPath, "mainnet", "", "m/44'/512'/0'/0/0");
     assert(w0.address === w0again.address, `same path = same address`);
   } catch (err) {
     console.error("  BIP39 path error:", err);

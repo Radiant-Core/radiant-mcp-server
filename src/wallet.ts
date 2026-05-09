@@ -164,6 +164,9 @@ export class AgentWallet {
     return b58check(this.network === "mainnet" ? 0x80 : 0xef, Buffer.concat([this.privKey, Buffer.from([0x01])]));
   }
 
+  /** Legacy derivation path for backward compatibility (coin type 0) */
+  static readonly LEGACY_DERIVATION_PATH = "m/44'/0'/0'/0/0";
+
   /**
    * Generate a new wallet with BIP39 mnemonic + BIP32 HD derivation.
    * Returns the wallet plus the mnemonic (must be stored securely by the caller).
@@ -172,7 +175,7 @@ export class AgentWallet {
     network: "mainnet" | "testnet" = "mainnet",
     wordCount: 12 | 15 | 18 | 21 | 24 = 12,
     passphrase = "",
-    path = "m/44'/0'/0'/0/0",
+    path = "m/44'/512'/0'/0/0",
   ): { wallet: AgentWallet; mnemonic: string; path: string } {
     const result = generateWalletFromMnemonic(wordCount, passphrase, path);
     const wallet = new AgentWallet(Buffer.from(result.privateKey, "hex"), network);
@@ -186,13 +189,13 @@ export class AgentWallet {
    * @param mnemonic 12-24 word BIP39 mnemonic
    * @param network mainnet or testnet
    * @param passphrase optional BIP39 passphrase (not the wallet password)
-   * @param path BIP32 derivation path (default: m/44'/0'/0'/0/0)
+   * @param path BIP32 derivation path (default: m/44'/512'/0'/0/0 — Radiant SLIP-0044)
    */
   static fromMnemonic(
     mnemonic: string,
     network: "mainnet" | "testnet" = "mainnet",
     passphrase = "",
-    path = "m/44'/0'/0'/0/0",
+    path = "m/44'/512'/0'/0/0",
   ): AgentWallet {
     const result = restoreFromMnemonic(mnemonic, passphrase, path);
     const wallet = new AgentWallet(Buffer.from(result.privateKey, "hex"), network);

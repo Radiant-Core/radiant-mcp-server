@@ -475,21 +475,21 @@ async function main() {
     const { wallet: w1, mnemonic: phrase } = AgentWallet.generateWithMnemonic("mainnet", 12);
 
     // Derive index 0
-    const d0 = AgentWallet.fromMnemonic(phrase, "mainnet", "", "m/44'/0'/0'/0/0");
+    const d0 = AgentWallet.fromMnemonic(phrase, "mainnet", "", "m/44'/512'/0'/0/0");
     assert(typeof d0.address === "string" && d0.address.length > 0, "deriveAddress: index 0 has address");
     assert(d0.address === w1.address, "deriveAddress: same mnemonic+path yields same address");
 
     // Derive index 1 — different address
-    const d1 = AgentWallet.fromMnemonic(phrase, "mainnet", "", "m/44'/0'/0'/0/1");
+    const d1 = AgentWallet.fromMnemonic(phrase, "mainnet", "", "m/44'/512'/0'/0/1");
     assert(d1.address !== d0.address, "deriveAddress: index 1 differs from index 0");
 
     // Derive account 1 — different address
-    const d2 = AgentWallet.fromMnemonic(phrase, "mainnet", "", "m/44'/0'/1'/0/0");
+    const d2 = AgentWallet.fromMnemonic(phrase, "mainnet", "", "m/44'/512'/1'/0/0");
     assert(d2.address !== d0.address, "deriveAddress: account 1 differs from account 0");
     assert(d2.address !== d1.address, "deriveAddress: account 1 differs from index 1");
 
     // Passphrase changes derivation
-    const dPass = AgentWallet.fromMnemonic(phrase, "mainnet", "secret", "m/44'/0'/0'/0/0");
+    const dPass = AgentWallet.fromMnemonic(phrase, "mainnet", "secret", "m/44'/512'/0'/0/0");
     assert(dPass.address !== d0.address, "deriveAddress: passphrase changes address");
 
     // WIF is valid (can round-trip)

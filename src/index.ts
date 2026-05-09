@@ -722,7 +722,7 @@ server.tool(
     mnemonic: z.boolean().default(false).describe("If true, generate a BIP39 mnemonic (12 words) with HD derivation instead of a random key"),
     word_count: z.enum(["12", "15", "18", "21", "24"]).default("12").describe("Mnemonic word count (only used if mnemonic=true)"),
     passphrase: z.string().default("").describe("Optional BIP39 passphrase (only used if mnemonic=true)"),
-    path: z.string().default("m/44'/0'/0'/0/0").describe("BIP32 derivation path (only used if mnemonic=true)"),
+    path: z.string().default("m/44'/512'/0'/0/0").describe("BIP32 derivation path (only used if mnemonic=true, default: m/44'/512'/0'/0/0 — Radiant SLIP-0044)"),
   },
   async ({ network, mnemonic: useMnemonic, word_count, passphrase, path }) => {
     try {
@@ -765,7 +765,7 @@ server.tool(
     mnemonic: z.string().describe("BIP39 mnemonic phrase (12-24 words, space-separated)"),
     network: z.enum(["mainnet", "testnet"]).default("mainnet").describe("Network"),
     passphrase: z.string().default("").describe("Optional BIP39 passphrase"),
-    path: z.string().default("m/44'/0'/0'/0/0").describe("BIP32 derivation path"),
+    path: z.string().default("m/44'/512'/0'/0/0").describe("BIP32 derivation path (default: m/44'/512'/0'/0/0 — Radiant SLIP-0044)"),
   },
   async ({ mnemonic, network, passphrase, path }) => {
     try {
@@ -1512,7 +1512,7 @@ server.tool(
   "Derive a Radiant address from a BIP39 mnemonic and BIP32 derivation path. Lets agents manage per-task sub-wallets from a single root key. Returns the address, public key, and WIF for the derived key. Use different account/index values to generate isolated sub-wallets.",
   {
     mnemonic: z.string().describe("BIP39 mnemonic phrase (12-24 words, space-separated)"),
-    path: z.string().default("m/44'/0'/0'/0/0").describe("BIP32 derivation path (e.g. m/44'/0'/0'/0/1 for second address, m/44'/0'/1'/0/0 for second account)"),
+    path: z.string().default("m/44'/512'/0'/0/0").describe("BIP32 derivation path (default: m/44'/512'/0'/0/0 — Radiant Standard; e.g., m/44'/512'/0'/0/1 for second address, m/44'/512'/1'/0/0 for second account)"),
     network: z.enum(["mainnet", "testnet"]).default("mainnet").describe("Network"),
     passphrase: z.string().default("").describe("Optional BIP39 passphrase"),
   },

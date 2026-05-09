@@ -3,7 +3,7 @@
  * Uses Node.js crypto only — no external dependencies.
  *
  * Supports 12/15/18/21/24-word mnemonics.
- * Default derivation path: m/44'/0'/0'/0/index (BIP44, coin type 0)
+ * Default derivation path: m/44'/512'/0'/0/index (BIP44, SLIP-0044 coin type 512 for Radiant)
  */
 
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
@@ -198,7 +198,7 @@ function deriveChild(parent: HDKey, index: number): HDKey {
 }
 
 /**
- * Derive a private key from a path like "m/44'/0'/0'/0/0".
+ * Derive a private key from a path like "m/44'/512'/0'/0/0".
  */
 function derivePath(seed: Buffer, path: string): Buffer {
   const parts = path.split("/");
@@ -230,12 +230,12 @@ export interface MnemonicResult {
 
 /**
  * Generate a new mnemonic and derive the private key at the given path.
- * Default path: m/44'/0'/0'/0/0 (first BIP44 address, Bitcoin/Radiant compatible)
+ * Default path: m/44'/512'/0'/0/0 (first BIP44 address, Radiant SLIP-0044 standard)
  */
 export function generateWalletFromMnemonic(
   wordCount: 12 | 15 | 18 | 21 | 24 = 12,
   passphrase = "",
-  path = "m/44'/0'/0'/0/0",
+  path = "m/44'/512'/0'/0/0",
 ): MnemonicResult {
   const mnemonic = generateMnemonic(wordCount);
   const seed = mnemonicToSeed(mnemonic, passphrase);
@@ -254,7 +254,7 @@ export function generateWalletFromMnemonic(
 export function restoreFromMnemonic(
   mnemonic: string,
   passphrase = "",
-  path = "m/44'/0'/0'/0/0",
+  path = "m/44'/512'/0'/0/0",
 ): MnemonicResult {
   if (!validateMnemonic(mnemonic)) throw new Error("Invalid mnemonic");
   const seed = mnemonicToSeed(mnemonic, passphrase);

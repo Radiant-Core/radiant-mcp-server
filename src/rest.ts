@@ -608,7 +608,7 @@ route("POST", "/wallet/create", async (_p, _q, req, res) => {
   const { AgentWallet } = await import("./wallet.js");
   if (body.mnemonic) {
     const wc = (body.word_count || 12) as 12 | 15 | 18 | 21 | 24;
-    const { wallet, mnemonic, path } = AgentWallet.generateWithMnemonic(network, wc, body.passphrase || "", body.path || "m/44'/0'/0'/0/0");
+    const { wallet, mnemonic, path } = AgentWallet.generateWithMnemonic(network, wc, body.passphrase || "", body.path || "m/44'/512'/0'/0/0");
     json(res, { address: wallet.address, publicKey: wallet.getPublicKeyHex(), wif: wallet.getWIF(), mnemonic, derivationPath: path, network });
   } else {
     const wallet = AgentWallet.create(network);
@@ -620,8 +620,8 @@ route("POST", "/wallet/restore", async (_p, _q, req, res) => {
   const body = JSON.parse(await readBody(req));
   if (!body.mnemonic) return error(res, "Missing mnemonic");
   const { AgentWallet } = await import("./wallet.js");
-  const wallet = AgentWallet.fromMnemonic(body.mnemonic, body.network || "mainnet", body.passphrase || "", body.path || "m/44'/0'/0'/0/0");
-  json(res, { address: wallet.address, publicKey: wallet.getPublicKeyHex(), wif: wallet.getWIF(), derivationPath: body.path || "m/44'/0'/0'/0/0", network: body.network || "mainnet", valid: true });
+  const wallet = AgentWallet.fromMnemonic(body.mnemonic, body.network || "mainnet", body.passphrase || "", body.path || "m/44'/512'/0'/0/0");
+  json(res, { address: wallet.address, publicKey: wallet.getPublicKeyHex(), wif: wallet.getWIF(), derivationPath: body.path || "m/44'/512'/0'/0/0", network: body.network || "mainnet", valid: true });
 });
 
 // ════════════════════════════════════════════════════════════
@@ -866,13 +866,13 @@ route("POST", "/wallet/derive", async (_p, _q, req, res) => {
     body.mnemonic,
     body.network || "mainnet",
     body.passphrase || "",
-    body.path || "m/44'/0'/0'/0/0",
+    body.path || "m/44'/512'/0'/0/0",
   );
   json(res, {
     address: wallet.address,
     publicKey: wallet.getPublicKeyHex(),
     wif: wallet.getWIF(),
-    derivationPath: body.path || "m/44'/0'/0'/0/0",
+    derivationPath: body.path || "m/44'/512'/0'/0/0",
     network: body.network || "mainnet",
   });
 });
